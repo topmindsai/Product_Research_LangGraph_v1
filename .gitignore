@@ -40,4 +40,7 @@ wheels/
 .DS_Store
 Thumbs.db
 
+# LangGraph runtime files
+.langgraph_api/
+
 

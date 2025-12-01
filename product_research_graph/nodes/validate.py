@@ -9,6 +9,7 @@ import logging
 import re
 from typing import Any
 
+from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langsmith import traceable
@@ -20,10 +21,43 @@ from product_research_graph.tools.mcp_tools import (
     ZYTE_SCRAPE_TOOL_NAME,
 )
 from product_research_graph.prompts.templates import get_validation_prompt
+from product_research.config.settings import LangGraphConfig
 
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+def _create_validation_model():
+    """
+    Create the LLM model for validation based on configuration.
+
+    Auto-detects provider from model name:
+    - gpt-* → OpenAI (ChatOpenAI)
+    - claude-* → Anthropic (ChatAnthropic)
+
+    Returns:
+        A LangChain chat model instance configured for validation.
+    """
+    model_name = LangGraphConfig.VALIDATION_MODEL
+
+    if model_name.startswith("claude-"):
+        # Anthropic Claude model
+        logger.info(f"Using Anthropic model: {model_name}")
+        return ChatAnthropic(
+            model=model_name,
+            temperature=0,
+            max_tokens=4096,
+        )
+    else:
+        # Default to OpenAI (gpt-* or any other)
+        logger.info(f"Using OpenAI model: {model_name}")
+        return ChatOpenAI(
+            model=model_name,
+            temperature=0,
+            use_responses_api=True,
+            output_version="responses/v1",
+        )
 
 
 def _extract_text_from_message(message) -> str:
@@ -147,13 +181,8 @@ async def _execute_validation_with_react_agent(
         return None
 
     try:
-        # Create the model with Responses API - use gpt-5.1 for better validation quality
-        model = ChatOpenAI(
-            model="gpt-5.1",
-            temperature=0,
-            use_responses_api=True,
-            output_version="responses/v1",
-        )
+        # Create the model based on configuration (supports OpenAI and Anthropic)
+        model = _create_validation_model()
 
         # Create a ReAct agent with the tool
         agent = create_react_agent(
@@ -267,12 +296,7 @@ async def validate_node(state: ProductResearchState) -> dict:
         else:
             # No scrape tool available, use model only (fallback)
             logger.warning("Zyte scrape tool not available, using model-only validation")
-            model = ChatOpenAI(
-                model="gpt-5.1",
-                temperature=0,
-                use_responses_api=True,
-                output_version="responses/v1",
-            )
+            model = _create_validation_model()
             messages = [
                 SystemMessage(content=prompt),
                 HumanMessage(
