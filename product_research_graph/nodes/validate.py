@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langsmith import traceable
@@ -35,6 +36,7 @@ def _create_validation_model():
     Auto-detects provider from model name:
     - gpt-* → OpenAI (ChatOpenAI)
     - claude-* → Anthropic (ChatAnthropic)
+    - gemini-* → Google (ChatGoogleGenerativeAI)
 
     Returns:
         A LangChain chat model instance configured for validation.
@@ -48,6 +50,14 @@ def _create_validation_model():
             model=model_name,
             temperature=0,
             max_tokens=4096,
+        )
+    elif model_name.startswith("gemini-"):
+        # Google Gemini model
+        logger.info(f"Using Google Gemini model: {model_name}")
+        return ChatGoogleGenerativeAI(
+            model=model_name,
+            temperature=0,
+            max_output_tokens=4096,
         )
     else:
         # Default to OpenAI (gpt-* or any other)

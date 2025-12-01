@@ -37,8 +37,8 @@ class LangGraphConfig:
 
     # Model settings
     SEARCH_MODEL = os.getenv("LANGGRAPH_SEARCH_MODEL", "gpt-5-mini")
-    # Validation model - supports OpenAI (gpt-*) and Anthropic (claude-*) models
-    # Examples: "gpt-5.1", "claude-sonnet-4-5-20250929"
+    # Validation model - supports OpenAI (gpt-*), Anthropic (claude-*), and Google (gemini-*) models
+    # Examples: "gpt-5.1", "claude-sonnet-4-5-20250929", "gemini-3-pro-preview"
     VALIDATION_MODEL = os.getenv("LANGGRAPH_VALIDATION_MODEL", "gpt-5.1")
 
     # Retry settings
