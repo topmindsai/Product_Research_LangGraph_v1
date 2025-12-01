@@ -10,6 +10,7 @@ import pandas as pd
 
 from product_research.schemas.models import ProductInput, BatchResult
 from product_research_graph.workflow import run_workflow
+from product_research_graph.tools.mcp_tools import clear_mcp_caches
 
 
 def parse_input_file(file_path: str) -> list[ProductInput]:
@@ -143,8 +144,12 @@ async def run_batch_workflow(
         for idx, product in enumerate(products)
     ]
 
-    # Execute all tasks concurrently (limited by semaphore)
-    results = await asyncio.gather(*tasks)
+    try:
+        # Execute all tasks concurrently (limited by semaphore)
+        results = await asyncio.gather(*tasks)
+    finally:
+        # Clean up MCP caches after batch completes to prevent stale connections
+        await clear_mcp_caches()
 
     # Generate output path if not provided
     if output_path is None:

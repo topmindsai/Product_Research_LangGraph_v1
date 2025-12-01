@@ -4,6 +4,7 @@ This module uses create_react_agent from langgraph.prebuilt for proper
 tool execution with the Zyte MCP tool.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -185,6 +186,9 @@ async def _execute_validation_with_react_agent(
     - Tool binding to the model
     - Tool call execution
     - Multi-turn conversations
+
+    Returns None on failure instead of raising exceptions, allowing
+    graceful error handling in the workflow.
     """
     if tool is None:
         logger.error("Cannot execute ReAct agent without a tool")
@@ -208,8 +212,11 @@ async def _execute_validation_with_react_agent(
 
         logger.info(f"Invoking ReAct agent with Zyte tool: {tool.name}")
 
-        # Invoke the agent
-        result = await agent.ainvoke({"messages": messages})
+        # Invoke the agent with timeout protection (longer for validation/scraping)
+        result = await asyncio.wait_for(
+            agent.ainvoke({"messages": messages}),
+            timeout=120.0  # 2 minute timeout for validation
+        )
 
         # Extract the final response from the agent
         response_messages = result.get("messages", [])
@@ -235,9 +242,13 @@ async def _execute_validation_with_react_agent(
         logger.warning("ReAct agent returned no usable response")
         return None
 
+    except asyncio.TimeoutError:
+        logger.error("ReAct agent validation timed out after 120 seconds")
+        return None
     except Exception as e:
+        # Log but DON'T re-raise - return None for graceful degradation
         logger.error(f"ReAct agent validation failed: {e}")
-        raise
+        return None
 
 
 @traceable(name="validate_node")

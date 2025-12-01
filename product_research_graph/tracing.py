@@ -8,7 +8,7 @@ from typing import Optional
 from langsmith import Client
 
 # Default traces directory (project root / traces)
-TRACES_DIR = Path(__file__).parent.parent.parent / "traces"
+TRACES_DIR = Path(__file__).parent.parent / "traces"
 
 
 def get_traces_dir() -> Path:

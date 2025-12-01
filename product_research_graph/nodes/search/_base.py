@@ -8,6 +8,7 @@ This module contains common functions used by all search nodes:
 - Search execution logic
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -145,6 +146,9 @@ async def _execute_search_with_react_agent(
     - Tool binding to the model
     - Tool call execution
     - Result extraction
+
+    Returns None on failure instead of raising exceptions, allowing
+    graceful fallback to the next search config.
     """
     if tool is None:
         logger.error("Cannot execute ReAct agent without a tool")
@@ -173,8 +177,11 @@ async def _execute_search_with_react_agent(
 
         logger.info(f"Invoking ReAct agent with tool: {tool.name}")
 
-        # Invoke the agent
-        result = await agent.ainvoke({"messages": messages})
+        # Invoke the agent with timeout protection
+        result = await asyncio.wait_for(
+            agent.ainvoke({"messages": messages}),
+            timeout=60.0  # 60 second timeout for entire agent execution
+        )
 
         # Extract the final response from the agent
         response_messages = result.get("messages", [])
@@ -200,9 +207,13 @@ async def _execute_search_with_react_agent(
         logger.warning("ReAct agent returned no usable response")
         return None
 
+    except asyncio.TimeoutError:
+        logger.error("ReAct agent execution timed out after 60 seconds")
+        return None
     except Exception as e:
+        # Log but DON'T re-raise - return None for graceful degradation
         logger.error(f"ReAct agent execution failed: {e}")
-        raise
+        return None
 
 
 async def _execute_openai_search(

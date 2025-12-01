@@ -1,12 +1,13 @@
 """MCP tool adapters using langchain-mcp-adapters.
 
-This module provides MCP tool connections using the stateless pattern.
+This module provides MCP tool connections using cached clients.
 Uses Streamable HTTP transport for the MCP servers.
 
-IMPORTANT: Uses client.get_tools() directly (not session context manager)
-to avoid the session closing before tools can be invoked.
+IMPORTANT: Uses client caching to prevent connection race conditions
+when multiple concurrent workers request tools simultaneously.
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -18,6 +19,12 @@ from product_research.config.settings import serp_api_key, LangGraphConfig
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Module-level cache for MCP clients and their tools
+# This prevents creating new connections for every tool retrieval
+_serp_tools_cache: list[BaseTool] | None = None
+_zyte_tools_cache: list[BaseTool] | None = None
+_cache_lock = asyncio.Lock()
 
 # MCP Server URLs (from settings for consistency)
 SERP_MCP_URL = LangGraphConfig.SERP_MCP_URL
@@ -31,59 +38,95 @@ ZYTE_SCRAPE_TOOL_NAME = "scrape_product_optimized"
 
 async def get_serp_tools() -> list[BaseTool]:
     """
-    Get all search tools from the SERP MCP server.
+    Get all search tools from the SERP MCP server with caching.
 
-    Uses client.get_tools() directly which manages connections internally.
-    This is the stateless approach recommended in langchain-mcp-adapters docs.
+    Uses a module-level cache to prevent creating new connections for every
+    tool retrieval, which was causing race conditions with concurrent workers.
 
     Returns:
         List of BaseTool instances from the SERP MCP server.
     """
-    client = MultiServerMCPClient({
-        "serp_mcp": {
-            "url": SERP_MCP_URL,
-            "transport": "streamable_http",
-            "headers": {
-                "Authorization": f"Bearer {serp_api_key}"
-            },
-            "timeout": LangGraphConfig.MCP_TIMEOUT,
-        }
-    })
+    global _serp_tools_cache
 
-    try:
-        tools = await client.get_tools()
-        logger.info(f"Loaded {len(tools)} tools from SERP MCP: {[t.name for t in tools]}")
-        return tools
-    except Exception as e:
-        logger.error(f"Failed to load SERP MCP tools: {e}")
-        return []
+    # Use lock to prevent race conditions during cache population
+    async with _cache_lock:
+        # Return cached tools if available
+        if _serp_tools_cache is not None:
+            logger.debug(f"Using cached SERP tools: {[t.name for t in _serp_tools_cache]}")
+            return _serp_tools_cache
+
+        # Create new client and fetch tools
+        client = MultiServerMCPClient({
+            "serp_mcp": {
+                "url": SERP_MCP_URL,
+                "transport": "streamable_http",
+                "headers": {
+                    "Authorization": f"Bearer {serp_api_key}"
+                },
+                "timeout": LangGraphConfig.MCP_TIMEOUT,
+            }
+        })
+
+        try:
+            # Add timeout protection for tool fetching
+            tools = await asyncio.wait_for(
+                client.get_tools(),
+                timeout=LangGraphConfig.MCP_TIMEOUT
+            )
+            _serp_tools_cache = tools
+            logger.info(f"Loaded {len(tools)} tools from SERP MCP: {[t.name for t in tools]}")
+            return tools
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout loading SERP MCP tools after {LangGraphConfig.MCP_TIMEOUT}s")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to load SERP MCP tools: {e}")
+            return []
 
 
 async def get_zyte_tools() -> list[BaseTool]:
     """
-    Get all tools from the Zyte MCP server.
+    Get all tools from the Zyte MCP server with caching.
 
-    Uses client.get_tools() directly which manages connections internally.
-    This is the stateless approach recommended in langchain-mcp-adapters docs.
+    Uses a module-level cache to prevent creating new connections for every
+    tool retrieval, which was causing race conditions with concurrent workers.
 
     Returns:
         List of BaseTool instances from the Zyte MCP server.
     """
-    client = MultiServerMCPClient({
-        "zyte_mcp": {
-            "url": ZYTE_MCP_URL,
-            "transport": "streamable_http",
-            "timeout": 60.0,
-        }
-    })
+    global _zyte_tools_cache
 
-    try:
-        tools = await client.get_tools()
-        logger.info(f"Loaded {len(tools)} tools from Zyte MCP: {[t.name for t in tools]}")
-        return tools
-    except Exception as e:
-        logger.error(f"Failed to load Zyte MCP tools: {e}")
-        return []
+    # Use lock to prevent race conditions during cache population
+    async with _cache_lock:
+        # Return cached tools if available
+        if _zyte_tools_cache is not None:
+            logger.debug(f"Using cached Zyte tools: {[t.name for t in _zyte_tools_cache]}")
+            return _zyte_tools_cache
+
+        # Create new client and fetch tools
+        client = MultiServerMCPClient({
+            "zyte_mcp": {
+                "url": ZYTE_MCP_URL,
+                "transport": "streamable_http",
+                "timeout": 60.0,
+            }
+        })
+
+        try:
+            # Add timeout protection for tool fetching
+            tools = await asyncio.wait_for(
+                client.get_tools(),
+                timeout=60.0
+            )
+            _zyte_tools_cache = tools
+            logger.info(f"Loaded {len(tools)} tools from Zyte MCP: {[t.name for t in tools]}")
+            return tools
+        except asyncio.TimeoutError:
+            logger.error("Timeout loading Zyte MCP tools after 60s")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to load Zyte MCP tools: {e}")
+            return []
 
 
 async def get_google_search_tool() -> BaseTool | None:
@@ -174,3 +217,18 @@ def get_tool_name_for_type(tool_type: str) -> str:
         "zyte_mcp": ZYTE_SCRAPE_TOOL_NAME,
     }
     return mapping.get(tool_type, tool_type)
+
+
+async def clear_mcp_caches() -> None:
+    """
+    Clear all MCP tool caches.
+
+    Call this function after batch processing completes or when recovering
+    from critical errors to ensure fresh connections on next use.
+    """
+    global _serp_tools_cache, _zyte_tools_cache
+
+    async with _cache_lock:
+        _serp_tools_cache = None
+        _zyte_tools_cache = None
+        logger.info("Cleared MCP tool caches")

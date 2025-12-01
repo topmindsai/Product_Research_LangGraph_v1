@@ -70,7 +70,7 @@ git clone <repository-url>
 cd Product_Research_Agent_v2
 
 # Create virtual environment
-python -m venv .venv
+
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
@@ -127,6 +127,16 @@ curl -X POST http://localhost:8000/api/v1/product-images \
     "barcode": "032054072245",
     "sku": "SQDR45115",
     "title": "Danielson SQDR45115 Squid Rigged 4.5\" Glow/Blue"
+  }'
+```
+
+```bash
+curl -X POST http://localhost:8000/api/v1/product-images \
+  -H "Content-Type: application/json" \
+  -d '{
+    "barcode": "22677322513",
+    "sku": "KSJ280NFZ",
+    "title": "Williamson KSJ280NFZ Kensaki Jig"
   }'
 ```
 
