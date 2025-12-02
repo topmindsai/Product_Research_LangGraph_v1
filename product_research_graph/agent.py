@@ -95,17 +95,19 @@ def create_product_research_graph() -> StateGraph:
       ├─► search_sku_google ──────┤                       │
       ├─► search_sku_yahoo ───────┼──► filter ──► validate ──► should_continue?
       ├─► search_sku_openai ──────┤                       │         │
-      ├─► search_title_sku_google ┤                       │    (continue)
-      └─► search_all_fields_openai┘                       │         │
-                                                          └─────────┘
-                                                                │
-                                                              (done)
-                                                                │
-                                                                ▼
-                                                            finalize
-                                                                │
-                                                                ▼
-                                                               END
+      ├─► search_title_sku_google ┘                       │    (continue)
+      │                                                   └─────────┘
+      │                                                         │
+      └─► search_all_fields_openai ─────────────────────┐     (done)
+                                                        │       │
+                                                        ▼       ▼
+                                                        finalize
+                                                            │
+                                                            ▼
+                                                           END
+
+    Note: search_all_fields_openai routes directly to finalize (skips filter/validate)
+          as a last-resort search that passes URLs as-is without image extraction.
 
     Returns:
         Compiled StateGraph ready for execution
@@ -144,9 +146,14 @@ def create_product_research_graph() -> StateGraph:
     # Note: search_dispatcher uses Command to route to search nodes,
     # so we don't need explicit edges from dispatcher to search nodes
 
-    # Add edges - all search nodes converge to filter
+    # Add edges - most search nodes converge to filter
+    # Exception: search_all_fields_openai goes directly to finalize (skips filter/validate)
     for search_node in SEARCH_NODE_NAMES:
-        workflow.add_edge(search_node, "filter")
+        if search_node != "search_all_fields_openai":
+            workflow.add_edge(search_node, "filter")
+
+    # search_all_fields_openai routes directly to finalize (last resort search)
+    workflow.add_edge("search_all_fields_openai", "finalize")
 
     # Add edges - filter to validate
     workflow.add_edge("filter", "validate")

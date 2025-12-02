@@ -8,7 +8,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from product_research.langgraph.tracing import fetch_and_save_traces
+from product_research_graph.tracing import fetch_and_save_traces
 
 
 def main():
