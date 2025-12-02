@@ -171,11 +171,17 @@ def get_compiled_graph():
     """
     Get a compiled graph ready for execution.
 
+    Includes default recursion_limit for LangSmith Studio/Cloud deployments.
+
     Returns:
         Compiled graph with invoke/ainvoke/stream/astream methods
     """
+    from product_research.config.settings import LangGraphConfig
+
     workflow = create_product_research_graph()
-    return workflow.compile()
+    compiled = workflow.compile()
+    # Bake in default recursion_limit for Studio/Cloud deployments
+    return compiled.with_config(recursion_limit=LangGraphConfig.RECURSION_LIMIT)
 
 
 # Pre-compile the graph for reuse
