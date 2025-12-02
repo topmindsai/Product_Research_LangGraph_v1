@@ -14,6 +14,13 @@ class ValidationImageExtractionAgentSchema__ValidatedPagesItem(BaseModel):
     url: str
     validation_method: str
     image_urls: list[str]
+    reasoning: str = ""  # Explanation of why this page was validated
+
+
+class ValidationImageExtractionAgentSchema__InvalidUrlItem(BaseModel):
+    """An invalid URL with reasoning for why it was invalidated."""
+    url: str
+    reasoning: str = ""  # Explanation of why validation failed
 
 
 class ValidationImageExtractionAgentSchema(BaseModel):
@@ -22,7 +29,7 @@ class ValidationImageExtractionAgentSchema(BaseModel):
     total_checked: float
     total_validated_images: float
     validated_pages: list[ValidationImageExtractionAgentSchema__ValidatedPagesItem]
-    invalid_urls: list[str]
+    invalid_urls: list[ValidationImageExtractionAgentSchema__InvalidUrlItem]
 
 
 # Filter Agent Schema

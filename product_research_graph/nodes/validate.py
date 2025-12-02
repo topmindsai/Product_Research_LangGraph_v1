@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langsmith import traceable
 from langgraph.prebuilt import create_react_agent
 
-from product_research_graph.state import ProductResearchState, ValidatedPageDict
+from product_research_graph.state import ProductResearchState, ValidatedPageDict, InvalidUrlDict
 from product_research_graph.tools.mcp_tools import (
     get_zyte_scrape_tool,
     ZYTE_SCRAPE_TOOL_NAME,
@@ -269,7 +269,7 @@ async def validate_node(state: ProductResearchState) -> dict:
 
             logger.info(f"Parsed validation: {len(validated_pages_raw)} valid pages, {total_validated_images} images")
 
-            # Convert to proper format
+            # Convert validated_pages to proper format
             validated_pages: list[ValidatedPageDict] = []
             for page in validated_pages_raw:
                 validated_pages.append(
@@ -277,13 +277,30 @@ async def validate_node(state: ProductResearchState) -> dict:
                         url=page.get("url", ""),
                         validation_method=page.get("validation_method", "unknown"),
                         image_urls=page.get("image_urls", []),
+                        reasoning=page.get("reasoning", ""),
                     )
                 )
+
+            # Convert invalid_urls to proper format (handle both dict and string formats)
+            invalid_urls: list[InvalidUrlDict] = []
+            for item in invalid_urls_raw:
+                if isinstance(item, dict):
+                    invalid_urls.append(
+                        InvalidUrlDict(
+                            url=item.get("url", ""),
+                            reasoning=item.get("reasoning", ""),
+                        )
+                    )
+                elif isinstance(item, str):
+                    # Backward compatibility: handle plain strings
+                    invalid_urls.append(
+                        InvalidUrlDict(url=item, reasoning="No reasoning provided")
+                    )
 
             # Return incremental counts (state uses `add` reducer for accumulation)
             return {
                 "validated_pages": validated_pages,
-                "invalid_urls": invalid_urls_raw,
+                "invalid_urls": invalid_urls,
                 "total_validated_images": total_validated_images,  # Images found in THIS validation
                 "total_checked": len(filtered_urls),  # URLs checked in THIS validation
             }
@@ -292,7 +309,10 @@ async def validate_node(state: ProductResearchState) -> dict:
         logger.warning("Failed to parse validation results")
         return {
             "validated_pages": [],
-            "invalid_urls": filtered_urls,  # Mark all as invalid if parsing fails
+            "invalid_urls": [
+                InvalidUrlDict(url=url, reasoning="Validation parsing failed")
+                for url in filtered_urls
+            ],
             "total_validated_images": 0,  # No images found (add 0)
             "total_checked": len(filtered_urls),  # URLs checked in THIS validation
         }
@@ -301,7 +321,10 @@ async def validate_node(state: ProductResearchState) -> dict:
         logger.error(f"Validation error: {e}")
         return {
             "validated_pages": [],
-            "invalid_urls": filtered_urls,
+            "invalid_urls": [
+                InvalidUrlDict(url=url, reasoning=f"Validation error: {str(e)}")
+                for url in filtered_urls
+            ],
             "total_validated_images": 0,  # No images found (add 0)
             "total_checked": len(filtered_urls),  # URLs checked in THIS validation
         }

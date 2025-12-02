@@ -75,6 +75,7 @@ async def search_all_fields_openai_node(state: ProductResearchState) -> dict:
                         "url": url,
                         "validation_method": "all_fields_search",
                         "image_urls": image_urls,
+                        "reasoning": "Validated via comprehensive all-fields OpenAI web search",
                     })
                     total_images += len(image_urls)
 

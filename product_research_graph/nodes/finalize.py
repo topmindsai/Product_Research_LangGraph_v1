@@ -48,7 +48,21 @@ def finalize_node(state: ProductResearchState) -> dict:
             "url": page.get("url", ""),
             "validation_method": page.get("validation_method", "unknown"),
             "image_urls": page.get("image_urls", []),
+            "reasoning": page.get("reasoning", ""),
         })
+
+    # Deduplicate invalid_urls by URL while preserving structure
+    seen_invalid_urls: dict[str, dict] = {}
+    for item in invalid_urls:
+        if isinstance(item, dict):
+            url = item.get("url", "")
+            if url and url not in seen_invalid_urls:
+                seen_invalid_urls[url] = item
+        elif isinstance(item, str) and item not in seen_invalid_urls:
+            # Backward compatibility for plain strings
+            seen_invalid_urls[item] = {"url": item, "reasoning": ""}
+
+    formatted_invalid_urls = list(seen_invalid_urls.values())
 
     # Construct the final result matching ValidationImageExtractionAgentSchema
     final_result: dict[str, Any] = {
@@ -61,7 +75,7 @@ def finalize_node(state: ProductResearchState) -> dict:
         "total_checked": total_checked,
         "total_validated_images": total_validated_images,
         "validated_pages": formatted_pages,
-        "invalid_urls": list(set(invalid_urls)),  # Deduplicate
+        "invalid_urls": formatted_invalid_urls,
     }
 
     return {

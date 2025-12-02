@@ -14,6 +14,20 @@ def merge_lists(left: list, right: list) -> list:
     return left + right
 
 
+def merge_invalid_urls(left: list[dict], right: list[dict]) -> list[dict]:
+    """Reducer that merges invalid URL dicts, deduplicating by URL."""
+    if not left:
+        return right
+    if not right:
+        return left
+    seen_urls: dict[str, dict] = {}
+    for item in left + right:
+        url = item.get("url", "")
+        if url and url not in seen_urls:
+            seen_urls[url] = item
+    return list(seen_urls.values())
+
+
 class ProductResearchInputState(TypedDict):
     """Input schema - only the fields required to start the workflow."""
     barcode: NotRequired[str]  # Optional - can be empty
@@ -39,6 +53,13 @@ class ValidatedPageDict(TypedDict):
     url: str
     validation_method: str  # "barcode" or "sku"
     image_urls: list[str]
+    reasoning: str  # Explanation of why this page was validated
+
+
+class InvalidUrlDict(TypedDict):
+    """An invalid URL with reasoning for why it was invalidated."""
+    url: str
+    reasoning: str
 
 
 class ProductResearchState(TypedDict):
@@ -70,7 +91,7 @@ class ProductResearchState(TypedDict):
     # ===== Validation State =====
     total_validated_images: Annotated[int, add]              # Total images found (accumulates)
     validated_pages: Annotated[list[ValidatedPageDict], merge_lists]  # Accumulates
-    invalid_urls: Annotated[list[str], merge_lists]          # Accumulates
+    invalid_urls: Annotated[list[InvalidUrlDict], merge_invalid_urls]  # Accumulates
     total_checked: Annotated[int, add]                       # URLs checked so far (accumulates)
 
     # ===== Final Output =====
