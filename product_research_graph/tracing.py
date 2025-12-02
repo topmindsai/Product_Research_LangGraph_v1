@@ -3,6 +3,7 @@
 import json
 import time
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from langsmith import Client
@@ -59,8 +60,9 @@ def fetch_and_save_traces(
         trace_id=run_id
     )
 
-    # Save to JSONL file
-    output_file = output_dir / f"traces_{run_id}.jsonl"
+    # Save to JSONL file with datetime prefix
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_file = output_dir / f"traces_{timestamp}_{run_id}.jsonl"
     count = 0
 
     with open(output_file, "w") as f:

@@ -4,7 +4,11 @@ from typing import Literal
 
 from langgraph.graph import StateGraph, START, END
 
-from product_research_graph.state import ProductResearchState
+from product_research_graph.state import (
+    ProductResearchState,
+    ProductResearchInputState,
+    ProductResearchOutputState,
+)
 from product_research_graph.nodes import (
     initialize_node,
     filter_node,
@@ -106,8 +110,13 @@ def create_product_research_graph() -> StateGraph:
     Returns:
         Compiled StateGraph ready for execution
     """
-    # Create the graph with our state schema
-    workflow = StateGraph(ProductResearchState)
+    # Create the graph with explicit input/output schemas
+    # This ensures LangSmith only shows barcode, sku, title as required inputs
+    workflow = StateGraph(
+        ProductResearchState,
+        input=ProductResearchInputState,
+        output=ProductResearchOutputState,
+    )
 
     # Add nodes - core workflow nodes
     workflow.add_node("initialize", initialize_node)

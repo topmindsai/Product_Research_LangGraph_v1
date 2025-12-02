@@ -7,7 +7,6 @@ tool execution with the Zyte MCP tool.
 import asyncio
 import json
 import logging
-import re
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
@@ -23,6 +22,10 @@ from product_research_graph.tools.mcp_tools import (
     ZYTE_SCRAPE_TOOL_NAME,
 )
 from product_research_graph.prompts.templates import get_validation_prompt
+from product_research_graph.utils.parsing import (
+    extract_text_from_message,
+    extract_json_from_response,
+)
 from product_research.config.settings import LangGraphConfig
 
 
@@ -71,80 +74,6 @@ def _create_validation_model():
         )
 
 
-def _extract_text_from_message(message) -> str:
-    """
-    Extract text from AIMessage, handling both string and content block formats.
-
-    With output_version="responses/v1", AIMessage.content may be a list of
-    content blocks instead of a plain string.
-    """
-    # Prefer .text property if available (Responses API convenience)
-    if hasattr(message, 'text') and message.text:
-        return message.text
-
-    content = message.content
-
-    # If content is already a string, return it
-    if isinstance(content, str):
-        return content
-
-    # If content is a list of content blocks, extract text
-    if isinstance(content, list):
-        text_parts = []
-        for block in content:
-            if isinstance(block, str):
-                text_parts.append(block)
-            elif isinstance(block, dict) and block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
-        return "".join(text_parts)
-
-    return str(content) if content else ""
-
-
-def _extract_json_from_response(raw_results: str) -> str | None:
-    """
-    Extract JSON from LLM response that may contain reasoning text.
-
-    Handles cases where JSON is:
-    1. Wrapped in ```json ... ``` markdown blocks anywhere in the text
-    2. Raw JSON object embedded in text
-    3. Plain JSON response
-    """
-    content = raw_results.strip()
-
-    # Method 1: Extract JSON from markdown code block anywhere in text
-    json_match = re.search(r'```json\s*([\s\S]*?)```', content)
-    if json_match:
-        return json_match.group(1).strip()
-
-    # Method 2: Try plain ``` blocks
-    plain_match = re.search(r'```\s*([\s\S]*?)```', content)
-    if plain_match:
-        extracted = plain_match.group(1).strip()
-        # Verify it looks like JSON
-        if extracted.startswith('{'):
-            return extracted
-
-    # Method 3: Find raw JSON object by locating matching braces
-    json_start = content.find('{')
-    if json_start >= 0:
-        # Find the matching closing brace
-        brace_count = 0
-        for i, char in enumerate(content[json_start:], start=json_start):
-            if char == '{':
-                brace_count += 1
-            elif char == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    return content[json_start:i + 1]
-
-    # Method 4: If content is already valid JSON
-    if content.startswith('{'):
-        return content
-
-    return None
-
-
 def _parse_validation_results(raw_results: str | None) -> dict[str, Any] | None:
     """Parse validation results from string to dict."""
     if not raw_results:
@@ -152,7 +81,7 @@ def _parse_validation_results(raw_results: str | None) -> dict[str, Any] | None:
 
     try:
         # Extract JSON from response (handles reasoning text + markdown)
-        json_content = _extract_json_from_response(raw_results)
+        json_content = extract_json_from_response(raw_results)
 
         if not json_content:
             logger.warning("Could not extract JSON from validation response")
@@ -227,7 +156,7 @@ async def _execute_validation_with_react_agent(
             if isinstance(msg, AIMessage) and msg.content:
                 # Skip tool call responses (they have tool_calls attribute)
                 if not getattr(msg, 'tool_calls', None):
-                    final_response = _extract_text_from_message(msg)
+                    final_response = extract_text_from_message(msg)
                     break
 
         if final_response:
@@ -237,7 +166,7 @@ async def _execute_validation_with_react_agent(
             # If no plain AI message, get any content
             for msg in reversed(response_messages):
                 if isinstance(msg, AIMessage) and msg.content:
-                    return _extract_text_from_message(msg)
+                    return extract_text_from_message(msg)
 
         logger.warning("ReAct agent returned no usable response")
         return None
@@ -275,11 +204,12 @@ async def validate_node(state: ProductResearchState) -> dict:
 
     if not filtered_urls or total_filtered_urls == 0:
         logger.info("No URLs to validate")
+        # Return zeros - with `add` reducer, this adds nothing to current totals
         return {
             "validated_pages": [],
             "invalid_urls": [],
-            "total_validated_images": state.get("total_validated_images", 0),
-            "total_checked": state.get("total_checked", 0),
+            "total_validated_images": 0,
+            "total_checked": 0,
         }
 
     logger.info(f"Validating {len(filtered_urls)} URLs")
@@ -327,7 +257,7 @@ async def validate_node(state: ProductResearchState) -> dict:
                 ),
             ]
             response = await model.ainvoke(messages)
-            raw_result = _extract_text_from_message(response)
+            raw_result = extract_text_from_message(response)
 
         # Parse the results
         parsed = _parse_validation_results(raw_result)
@@ -350,15 +280,12 @@ async def validate_node(state: ProductResearchState) -> dict:
                     )
                 )
 
-            # Update total checked
-            current_total_checked = state.get("total_checked", 0)
-            new_total_checked = current_total_checked + len(filtered_urls)
-
+            # Return incremental counts (state uses `add` reducer for accumulation)
             return {
                 "validated_pages": validated_pages,
                 "invalid_urls": invalid_urls_raw,
-                "total_validated_images": total_validated_images,
-                "total_checked": new_total_checked,
+                "total_validated_images": total_validated_images,  # Images found in THIS validation
+                "total_checked": len(filtered_urls),  # URLs checked in THIS validation
             }
 
         # Parsing failed
@@ -366,8 +293,8 @@ async def validate_node(state: ProductResearchState) -> dict:
         return {
             "validated_pages": [],
             "invalid_urls": filtered_urls,  # Mark all as invalid if parsing fails
-            "total_validated_images": state.get("total_validated_images", 0),
-            "total_checked": state.get("total_checked", 0) + len(filtered_urls),
+            "total_validated_images": 0,  # No images found (add 0)
+            "total_checked": len(filtered_urls),  # URLs checked in THIS validation
         }
 
     except Exception as e:
@@ -375,6 +302,6 @@ async def validate_node(state: ProductResearchState) -> dict:
         return {
             "validated_pages": [],
             "invalid_urls": filtered_urls,
-            "total_validated_images": state.get("total_validated_images", 0),
-            "total_checked": state.get("total_checked", 0) + len(filtered_urls),
+            "total_validated_images": 0,  # No images found (add 0)
+            "total_checked": len(filtered_urls),  # URLs checked in THIS validation
         }

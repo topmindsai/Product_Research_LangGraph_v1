@@ -150,7 +150,7 @@ curl -X POST http://localhost:8000/api/v1/product-images/batch \
 ### Batch Processing (CLI)
 
 ```bash
-python main.py --batch products.csv --output results.csv
+python main.py --batch tests/3_Batch.csv --output tests/test_results/results.csv
 ```
 
 **Input file format (CSV):**

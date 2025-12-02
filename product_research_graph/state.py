@@ -1,6 +1,6 @@
 """State schema definition for the Product Research workflow."""
 
-from typing import TypedDict, Annotated, Any
+from typing import TypedDict, Annotated, Any, NotRequired
 from operator import add
 
 
@@ -12,6 +12,18 @@ def merge_lists(left: list, right: list) -> list:
         return left
     # For simple values, just concatenate
     return left + right
+
+
+class ProductResearchInputState(TypedDict):
+    """Input schema - only the fields required to start the workflow."""
+    barcode: NotRequired[str]  # Optional - can be empty
+    sku: str
+    title: str
+
+
+class ProductResearchOutputState(TypedDict):
+    """Output schema - only the final result."""
+    final_result: dict[str, Any] | None
 
 
 class SearchConfigDict(TypedDict):
@@ -56,10 +68,10 @@ class ProductResearchState(TypedDict):
     total_filtered_urls: int       # Count of filtered URLs
 
     # ===== Validation State =====
-    total_validated_images: int                              # Total images found
+    total_validated_images: Annotated[int, add]              # Total images found (accumulates)
     validated_pages: Annotated[list[ValidatedPageDict], merge_lists]  # Accumulates
     invalid_urls: Annotated[list[str], merge_lists]          # Accumulates
-    total_checked: int                                        # URLs checked so far
+    total_checked: Annotated[int, add]                       # URLs checked so far (accumulates)
 
     # ===== Final Output =====
     final_result: dict[str, Any] | None  # Final output matching schema

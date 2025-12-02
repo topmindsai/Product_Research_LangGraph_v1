@@ -11,7 +11,6 @@ This module contains common functions used by all search nodes:
 import asyncio
 import json
 import logging
-import re
 from typing import Any
 
 from langchain_openai import ChatOpenAI
@@ -26,87 +25,52 @@ from product_research_graph.tools.mcp_tools import (
 )
 from product_research_graph.prompts.templates import get_search_prompt
 from product_research_graph.config import get_tool_display_name
+from product_research_graph.utils.parsing import (
+    extract_text_from_message,
+    extract_json_from_response,
+)
 
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Maximum retries per search config
+# Maximum retries per search config (only for transient errors, not "no results")
 MAX_RETRIES = 3
 
 
-def _extract_text_from_message(message) -> str:
+# Phrases that indicate "no results found" (not an error, don't retry)
+NO_RESULTS_PHRASES = [
+    "no results",
+    "hasn't returned any results",
+    "hasn't returned any results",  # Different apostrophe
+    '"total_results":0',
+    '"total_results": 0',
+    '"organic_results_state":"fully empty"',
+    '"organic_results_state": "fully empty"',
+    "your search did not match any documents",
+    "did not match any documents",
+]
+
+
+def _is_no_results_response(response: str | None) -> bool:
     """
-    Extract text from AIMessage, handling both string and content block formats.
+    Check if the response indicates zero search results (not an error).
 
-    With output_version="responses/v1", AIMessage.content may be a list of
-    content blocks instead of a plain string.
+    This distinguishes between:
+    - "No results found" - Valid response, don't retry
+    - API error/timeout - Should retry
+
+    Args:
+        response: Raw response string from search
+
+    Returns:
+        True if response indicates no results (don't retry), False otherwise
     """
-    # Prefer .text property if available (Responses API convenience)
-    if hasattr(message, 'text') and message.text:
-        return message.text
+    if not response:
+        return False
 
-    content = message.content
-
-    # If content is already a string, return it
-    if isinstance(content, str):
-        return content
-
-    # If content is a list of content blocks, extract text
-    if isinstance(content, list):
-        text_parts = []
-        for block in content:
-            if isinstance(block, str):
-                text_parts.append(block)
-            elif isinstance(block, dict) and block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
-        return "".join(text_parts)
-
-    return str(content) if content else ""
-
-
-def _extract_json_from_response(raw_results: str) -> str | None:
-    """
-    Extract JSON from LLM response that may contain reasoning text.
-
-    Handles cases where JSON is:
-    1. Wrapped in ```json ... ``` markdown blocks anywhere in the text
-    2. Raw JSON object embedded in text
-    3. Plain JSON response
-    """
-    content = raw_results.strip()
-
-    # Method 1: Extract JSON from markdown code block anywhere in text
-    json_match = re.search(r'```json\s*([\s\S]*?)```', content)
-    if json_match:
-        return json_match.group(1).strip()
-
-    # Method 2: Try plain ``` blocks
-    plain_match = re.search(r'```\s*([\s\S]*?)```', content)
-    if plain_match:
-        extracted = plain_match.group(1).strip()
-        # Verify it looks like JSON
-        if extracted.startswith('{'):
-            return extracted
-
-    # Method 3: Find raw JSON object by locating matching braces
-    json_start = content.find('{')
-    if json_start >= 0:
-        # Find the matching closing brace
-        brace_count = 0
-        for i, char in enumerate(content[json_start:], start=json_start):
-            if char == '{':
-                brace_count += 1
-            elif char == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    return content[json_start:i + 1]
-
-    # Method 4: If content is already valid JSON
-    if content.startswith('{'):
-        return content
-
-    return None
+    lower = response.lower()
+    return any(phrase.lower() in lower for phrase in NO_RESULTS_PHRASES)
 
 
 async def _get_tool_for_type(tool_type: str):
@@ -192,7 +156,7 @@ async def _execute_search_with_react_agent(
             if isinstance(msg, AIMessage) and msg.content:
                 # Skip tool call responses (they have tool_calls attribute)
                 if not getattr(msg, 'tool_calls', None):
-                    final_response = _extract_text_from_message(msg)
+                    final_response = extract_text_from_message(msg)
                     break
 
         if final_response:
@@ -202,7 +166,7 @@ async def _execute_search_with_react_agent(
             # If no plain AI message, get any content
             for msg in reversed(response_messages):
                 if isinstance(msg, AIMessage) and msg.content:
-                    return _extract_text_from_message(msg)
+                    return extract_text_from_message(msg)
 
         logger.warning("ReAct agent returned no usable response")
         return None
@@ -240,7 +204,7 @@ async def _execute_openai_search(
         ]
 
         response = await model.ainvoke(messages)
-        return _extract_text_from_message(response)
+        return extract_text_from_message(response)
     except Exception as e:
         logger.error(f"OpenAI search error: {e}")
         return None
@@ -253,7 +217,7 @@ def _parse_search_results(raw_results: str | None) -> dict[str, Any] | None:
 
     try:
         # Extract JSON from response (handles reasoning text + markdown)
-        json_content = _extract_json_from_response(raw_results)
+        json_content = extract_json_from_response(raw_results)
 
         if not json_content:
             logger.warning("Could not extract JSON from search response")
@@ -361,6 +325,17 @@ async def execute_search(
                 logger.info(f"[{node_name}] Using direct OpenAI search (attempt {retry_count + 1}/{MAX_RETRIES})")
                 search_result = await _execute_openai_search(prompt, search_input)
 
+            # Check if this is a "no results" response (valid response, don't retry)
+            if _is_no_results_response(search_result):
+                logger.info(f"[{node_name}] Search returned zero results (not an error) - moving to next config")
+                # Don't retry - this is a valid "no results" response
+                return {
+                    "current_search_results": None,
+                    "search_successful": False,
+                    "retry_count": 0,
+                    "search_index": search_index + 1,
+                }
+
             # Try to parse results
             parsed = _parse_search_results(search_result)
             if parsed:
@@ -372,15 +347,26 @@ async def execute_search(
                     "search_index": search_index + 1,
                 }
 
-            # No valid results, retry
-            logger.warning(f"[{node_name}] Search returned no valid results, retrying...")
+            # Parsing failed but not a clear "no results" - might be transient, retry
+            logger.warning(f"[{node_name}] Search returned unparseable results, retrying... (attempt {retry_count + 1}/{MAX_RETRIES})")
             retry_count += 1
 
         except Exception as e:
+            error_str = str(e)
+            # Check if exception message indicates "no results"
+            if _is_no_results_response(error_str):
+                logger.info(f"[{node_name}] Search exception indicates zero results - moving to next config")
+                return {
+                    "current_search_results": None,
+                    "search_successful": False,
+                    "retry_count": 0,
+                    "search_index": search_index + 1,
+                }
+            # Actual error - retry
             logger.error(f"[{node_name}] Search attempt {retry_count + 1} failed: {e}")
             retry_count += 1
 
-    # All retries exhausted
+    # All retries exhausted (only for actual errors, not "no results")
     logger.warning(f"[{node_name}] All {MAX_RETRIES} retries exhausted for search config {search_index + 1}")
     return {
         "current_search_results": None,

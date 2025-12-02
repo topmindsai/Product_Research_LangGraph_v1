@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from typing import Any
 
 from langchain_openai import ChatOpenAI
@@ -11,84 +10,14 @@ from langsmith import traceable
 
 from product_research_graph.state import ProductResearchState
 from product_research_graph.prompts.templates import get_filter_prompt
+from product_research_graph.utils.parsing import (
+    extract_text_from_message,
+    extract_json_from_response,
+)
 
 
 # Set up logging
 logger = logging.getLogger(__name__)
-
-
-def _extract_text_from_message(message) -> str:
-    """
-    Extract text from AIMessage, handling both string and content block formats.
-
-    With output_version="responses/v1", AIMessage.content may be a list of
-    content blocks instead of a plain string.
-    """
-    # Prefer .text property if available (Responses API convenience)
-    if hasattr(message, 'text') and message.text:
-        return message.text
-
-    content = message.content
-
-    # If content is already a string, return it
-    if isinstance(content, str):
-        return content
-
-    # If content is a list of content blocks, extract text
-    if isinstance(content, list):
-        text_parts = []
-        for block in content:
-            if isinstance(block, str):
-                text_parts.append(block)
-            elif isinstance(block, dict) and block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
-        return "".join(text_parts)
-
-    return str(content) if content else ""
-
-
-def _extract_json_from_response(raw_results: str) -> str | None:
-    """
-    Extract JSON from LLM response that may contain reasoning text.
-
-    Handles cases where JSON is:
-    1. Wrapped in ```json ... ``` markdown blocks anywhere in the text
-    2. Raw JSON object embedded in text
-    3. Plain JSON response
-    """
-    content = raw_results.strip()
-
-    # Method 1: Extract JSON from markdown code block anywhere in text
-    json_match = re.search(r'```json\s*([\s\S]*?)```', content)
-    if json_match:
-        return json_match.group(1).strip()
-
-    # Method 2: Try plain ``` blocks
-    plain_match = re.search(r'```\s*([\s\S]*?)```', content)
-    if plain_match:
-        extracted = plain_match.group(1).strip()
-        # Verify it looks like JSON
-        if extracted.startswith('{'):
-            return extracted
-
-    # Method 3: Find raw JSON object by locating matching braces
-    json_start = content.find('{')
-    if json_start >= 0:
-        # Find the matching closing brace
-        brace_count = 0
-        for i, char in enumerate(content[json_start:], start=json_start):
-            if char == '{':
-                brace_count += 1
-            elif char == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    return content[json_start:i + 1]
-
-    # Method 4: If content is already valid JSON
-    if content.startswith('{'):
-        return content
-
-    return None
 
 
 def _parse_filter_results(raw_results: str | None) -> dict[str, Any] | None:
@@ -98,7 +27,7 @@ def _parse_filter_results(raw_results: str | None) -> dict[str, Any] | None:
 
     try:
         # Extract JSON from response (handles reasoning text + markdown)
-        json_content = _extract_json_from_response(raw_results)
+        json_content = extract_json_from_response(raw_results)
 
         if not json_content:
             logger.warning("Could not extract JSON from filter response")
@@ -180,7 +109,7 @@ async def filter_node(state: ProductResearchState) -> dict:
         ]
 
         response = await model.ainvoke(messages)
-        raw_result = _extract_text_from_message(response)
+        raw_result = extract_text_from_message(response)
 
         # Parse the results
         parsed = _parse_filter_results(raw_result)

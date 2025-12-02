@@ -53,6 +53,13 @@ def parse_input_file(file_path: str) -> list[ProductInput]:
     return products
 
 
+def add_timestamp_to_path(output_path: str) -> str:
+    """Insert datetime before file extension in output path."""
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    base, ext = os.path.splitext(output_path)
+    return f"{base}_{timestamp}{ext}"
+
+
 def write_results_to_csv(results: list[BatchResult], output_path: str) -> str:
     """
     Write batch results to CSV file.
@@ -151,10 +158,12 @@ async def run_batch_workflow(
         # Clean up MCP caches after batch completes to prevent stale connections
         await clear_mcp_caches()
 
-    # Generate output path if not provided
+    # Generate output path if not provided, or add timestamp to user-provided path
     if output_path is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_path = f"batch_results_{timestamp}.csv"
+    else:
+        output_path = add_timestamp_to_path(output_path)
 
     # Write results to CSV
     output_file = write_results_to_csv(results, output_path)
