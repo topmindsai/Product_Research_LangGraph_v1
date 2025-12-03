@@ -3,6 +3,7 @@
 import json
 import time
 import os
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -67,7 +68,16 @@ def fetch_and_save_traces(
 
     with open(output_file, "w") as f:
         for run in runs:
-            f.write(json.dumps(run.dict(), default=str) + "\n")
+            # Suppress Pydantic serialization warnings from OpenAI SDK types
+            # These warnings occur due to union type discriminator mismatches in
+            # ResponseFunctionWebSearch, ActionSearch, etc. from openai-agents SDK
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=UserWarning,
+                    message=".*Pydantic serializer warnings.*"
+                )
+                f.write(json.dumps(run.dict(), default=str) + "\n")
             count += 1
 
     print(f"[Tracing] Saved {count} trace entries to {output_file}")

@@ -5,11 +5,15 @@ Uses Streamable HTTP transport for the MCP servers.
 
 IMPORTANT: Uses client caching to prevent connection race conditions
 when multiple concurrent workers request tools simultaneously.
+
+NOTE: MCP SSE connections can be flaky with concurrent workers. This module
+includes retry logic with cache invalidation to handle ClosedResourceError
+and similar connection issues.
 """
 
 import asyncio
 import logging
-from typing import Any
+from typing import Callable, Awaitable
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -19,6 +23,29 @@ from product_research.config.settings import serp_api_key, LangGraphConfig
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+# Connection error patterns that indicate the MCP connection needs to be refreshed
+MCP_CONNECTION_ERROR_PATTERNS = (
+    "ClosedResourceError",
+    "ClosedResourceError",  # Different import paths may have different names
+    "closed",
+    "Connection closed",
+    "BrokenResourceError",
+    "TaskGroup",  # "unhandled errors in a TaskGroup"
+    "stream",
+)
+
+
+class MCPConnectionError(Exception):
+    """Raised when MCP connection fails and needs to be retried."""
+    pass
+
+
+def _is_mcp_connection_error(error: Exception) -> bool:
+    """Check if an exception is related to MCP connection issues."""
+    error_str = f"{type(error).__name__}: {str(error)}"
+    return any(pattern.lower() in error_str.lower() for pattern in MCP_CONNECTION_ERROR_PATTERNS)
 
 # Module-level cache for MCP clients and their tools
 # This prevents creating new connections for every tool retrieval
@@ -232,3 +259,51 @@ async def clear_mcp_caches() -> None:
         _serp_tools_cache = None
         _zyte_tools_cache = None
         logger.info("Cleared MCP tool caches")
+
+
+async def get_tool_with_retry(
+    get_tool_func: Callable[[], Awaitable[BaseTool | None]],
+    tool_name: str,
+    max_retries: int = 2,
+) -> BaseTool | None:
+    """
+    Get an MCP tool with automatic retry on connection errors.
+
+    This wrapper handles ClosedResourceError and similar MCP connection issues
+    by clearing the cache and retrying with a fresh connection.
+
+    Args:
+        get_tool_func: Async function that retrieves the tool
+        tool_name: Name of the tool for logging
+        max_retries: Maximum number of retries (default: 2)
+
+    Returns:
+        The tool or None if all retries fail
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            tool = await get_tool_func()
+            if tool:
+                return tool
+            # Tool not found, no point in retrying
+            logger.warning(f"Tool {tool_name} not found after attempt {attempt + 1}")
+            return None
+        except Exception as e:
+            if _is_mcp_connection_error(e):
+                if attempt < max_retries:
+                    logger.warning(
+                        f"MCP connection error getting {tool_name} (attempt {attempt + 1}/{max_retries + 1}): {e}"
+                    )
+                    logger.info("Clearing MCP cache and retrying...")
+                    await clear_mcp_caches()
+                    # Brief delay before retry to allow resources to clean up
+                    await asyncio.sleep(0.5)
+                    continue
+                else:
+                    logger.error(
+                        f"MCP connection error getting {tool_name} after {max_retries + 1} attempts: {e}"
+                    )
+            else:
+                logger.error(f"Unexpected error getting {tool_name}: {e}")
+            return None
+    return None

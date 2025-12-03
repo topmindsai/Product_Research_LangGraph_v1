@@ -26,6 +26,8 @@ from product_research_graph.state import (
 from product_research_graph.tools.mcp_tools import (
     get_zyte_scrape_tool,
     ZYTE_SCRAPE_TOOL_NAME,
+    clear_mcp_caches,
+    _is_mcp_connection_error,
 )
 from product_research_graph.prompts.templates import get_validation_prompt
 from product_research_graph.utils.parsing import (
@@ -134,6 +136,7 @@ async def _execute_validation_with_react_agent(
     tool,
     prompt: str,
     urls_str: str,
+    max_retries: int = 2,
 ) -> str | None:
     """
     Execute validation using a ReAct agent for proper tool execution.
@@ -143,6 +146,9 @@ async def _execute_validation_with_react_agent(
     - Tool call execution
     - Multi-turn conversations
 
+    Includes retry logic for MCP connection errors (ClosedResourceError, etc.)
+    which can occur when SSE streams are unexpectedly closed.
+
     Returns None on failure instead of raising exceptions, allowing
     graceful error handling in the workflow.
     """
@@ -150,61 +156,83 @@ async def _execute_validation_with_react_agent(
         logger.error("Cannot execute ReAct agent without a tool")
         return None
 
-    try:
-        # Create the model based on configuration (supports OpenAI and Anthropic)
-        model = _create_validation_model()
+    current_tool = tool
 
-        # Create a ReAct agent with the tool
-        agent = create_react_agent(
-            model=model,
-            tools=[tool],
-        )
+    for attempt in range(max_retries + 1):
+        try:
+            # Create the model based on configuration (supports OpenAI and Anthropic)
+            model = _create_validation_model()
 
-        # Prepare the input messages
-        messages = [
-            SystemMessage(content=prompt),
-            HumanMessage(content=f"Please validate these URLs and extract product images: {urls_str}"),
-        ]
+            # Create a ReAct agent with the tool
+            agent = create_react_agent(
+                model=model,
+                tools=[current_tool],
+            )
 
-        logger.info(f"Invoking ReAct agent with Zyte tool: {tool.name}")
+            # Prepare the input messages
+            messages = [
+                SystemMessage(content=prompt),
+                HumanMessage(content=f"Please validate these URLs and extract product images: {urls_str}"),
+            ]
 
-        # Invoke the agent with timeout protection (longer for validation/scraping)
-        result = await asyncio.wait_for(
-            agent.ainvoke({"messages": messages}),
-            timeout=120.0  # 2 minute timeout for validation
-        )
+            logger.info(f"Invoking ReAct agent with Zyte tool: {current_tool.name} (attempt {attempt + 1}/{max_retries + 1})")
 
-        # Extract the final response from the agent
-        response_messages = result.get("messages", [])
+            # Invoke the agent with timeout protection (longer for validation/scraping)
+            result = await asyncio.wait_for(
+                agent.ainvoke({"messages": messages}),
+                timeout=120.0  # 2 minute timeout for validation
+            )
 
-        # Find the last AI message (the final response)
-        final_response = None
-        for msg in reversed(response_messages):
-            if isinstance(msg, AIMessage) and msg.content:
-                # Skip tool call responses (they have tool_calls attribute)
-                if not getattr(msg, 'tool_calls', None):
-                    final_response = extract_text_from_message(msg)
-                    break
+            # Extract the final response from the agent
+            response_messages = result.get("messages", [])
 
-        if final_response:
-            logger.info(f"ReAct agent returned validation response ({len(final_response)} chars)")
-            return final_response
-        else:
-            # If no plain AI message, get any content
+            # Find the last AI message (the final response)
+            final_response = None
             for msg in reversed(response_messages):
                 if isinstance(msg, AIMessage) and msg.content:
-                    return extract_text_from_message(msg)
+                    # Skip tool call responses (they have tool_calls attribute)
+                    if not getattr(msg, 'tool_calls', None):
+                        final_response = extract_text_from_message(msg)
+                        break
 
-        logger.warning("ReAct agent returned no usable response")
-        return None
+            if final_response:
+                logger.info(f"ReAct agent returned validation response ({len(final_response)} chars)")
+                return final_response
+            else:
+                # If no plain AI message, get any content
+                for msg in reversed(response_messages):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        return extract_text_from_message(msg)
 
-    except asyncio.TimeoutError:
-        logger.error("ReAct agent validation timed out after 120 seconds")
-        return None
-    except Exception as e:
-        # Log but DON'T re-raise - return None for graceful degradation
-        logger.error(f"ReAct agent validation failed: {e}")
-        return None
+            logger.warning("ReAct agent returned no usable response")
+            return None
+
+        except asyncio.TimeoutError:
+            logger.error("ReAct agent validation timed out after 120 seconds")
+            return None
+        except Exception as e:
+            # Check if this is an MCP connection error that should be retried
+            if _is_mcp_connection_error(e) and attempt < max_retries:
+                logger.warning(
+                    f"MCP connection error in ReAct agent validation (attempt {attempt + 1}/{max_retries + 1}): {e}"
+                )
+                logger.info("Clearing MCP cache and retrying with fresh connection...")
+                await clear_mcp_caches()
+                # Get fresh tool after clearing cache
+                fresh_tool = await get_zyte_scrape_tool()
+                if fresh_tool:
+                    current_tool = fresh_tool
+                    await asyncio.sleep(0.5)  # Brief delay before retry
+                    continue
+                else:
+                    logger.error("Failed to get fresh Zyte tool after cache clear")
+                    return None
+            else:
+                # Log but DON'T re-raise - return None for graceful degradation
+                logger.error(f"ReAct agent validation failed: {e}")
+                return None
+
+    return None
 
 
 @traceable(name="validate_node")

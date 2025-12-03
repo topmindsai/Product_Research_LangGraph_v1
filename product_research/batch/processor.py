@@ -3,10 +3,21 @@
 import os
 import asyncio
 import json
+import warnings
 from datetime import datetime
 from typing import Optional
 
 import pandas as pd
+
+# Suppress Pydantic serialization warnings from OpenAI SDK types globally
+# These warnings occur when LangSmith serializes OpenAI Responses API objects
+# (ResponseFunctionWebSearch, ActionSearch, etc.) which have complex union types
+# The warnings are cosmetic and don't affect functionality
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*Pydantic serializer warnings.*"
+)
 
 from product_research.schemas.models import ProductInput, BatchResult
 from product_research_graph.workflow import run_workflow
@@ -131,6 +142,10 @@ async def run_batch_workflow(
     """
     if not products:
         raise ValueError("No products to process")
+
+    # Clear MCP caches at batch start to ensure fresh connections
+    # This prevents issues with stale/shared connections from previous batches
+    await clear_mcp_caches()
 
     semaphore = asyncio.Semaphore(max_concurrent)
     total_products = len(products)
