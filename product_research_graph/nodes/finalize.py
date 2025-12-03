@@ -30,10 +30,19 @@ def finalize_node(state: ProductResearchState) -> dict:
     search_type_label = state.get("search_type_label", "barcode")
 
     # Get accumulated validation data
-    validated_pages = state.get("validated_pages", [])
+    # Prefer cleaned data if available (from image_urls_cleanup node)
+    cleaned_pages = state.get("cleaned_validated_pages")
+    validated_pages = cleaned_pages if cleaned_pages else state.get("validated_pages", [])
+
+    cleaned_images_count = state.get("cleaned_total_validated_images")
+    total_validated_images = (
+        cleaned_images_count
+        if cleaned_images_count is not None
+        else state.get("total_validated_images", 0)
+    )
+
     invalid_urls = state.get("invalid_urls", [])
     total_checked = state.get("total_checked", 0)
-    total_validated_images = state.get("total_validated_images", 0)
 
     # If total_validated_images wasn't set correctly, calculate it
     if total_validated_images == 0 and validated_pages:

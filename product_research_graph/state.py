@@ -111,6 +111,10 @@ class ProductResearchState(TypedDict):
     invalid_urls: Annotated[list[InvalidUrlDict], merge_invalid_urls]  # Accumulates
     total_checked: Annotated[int, add]                       # URLs checked so far (accumulates)
 
+    # ===== Image Cleanup State =====
+    cleaned_validated_pages: list[ValidatedPageDict]    # Cleaned pages (overwrites each iteration)
+    cleaned_total_validated_images: int                 # Corrected count (overwrites each iteration)
+
     # ===== Final Output =====
     final_result: dict[str, Any] | None  # Final output matching schema
 
@@ -139,6 +143,9 @@ def create_initial_state(barcode: str, sku: str, title: str) -> ProductResearchS
         validated_pages=[],
         invalid_urls=[],
         total_checked=0,
+        # Image cleanup state
+        cleaned_validated_pages=[],
+        cleaned_total_validated_images=0,
         # Final output
         final_result=None,
     )
