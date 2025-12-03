@@ -10,12 +10,28 @@ class ValidationImageExtractionAgentSchema__Product(BaseModel):
     sku: str
 
 
+class WeightSchema(BaseModel):
+    """Product weight with unit of measure."""
+    unit_of_measure: str = ""  # e.g., "lb", "oz", "kg", "g"
+    value: float | None = None  # Weight value, None if not found
+
+
+class ProductDimensionsSchema(BaseModel):
+    """Product dimensions in inches."""
+    length: float | None = None  # Length in inches, None if not found
+    width: float | None = None   # Width in inches, None if not found
+    height: float | None = None  # Height in inches, None if not found
+
+
 class ValidationImageExtractionAgentSchema__ValidatedPagesItem(BaseModel):
     url: str
     validation_method: str
     image_urls: list[str]
     reasoning: str = ""  # Explanation of why this page was validated
     product_description: str = ""  # Product description extracted from the page
+    brand: str = ""  # Product brand name extracted from the page
+    weight: WeightSchema = WeightSchema()  # Product weight with unit of measure
+    product_dimensions: ProductDimensionsSchema = ProductDimensionsSchema()  # Dimensions in inches
 
 
 class ValidationImageExtractionAgentSchema__InvalidUrlItem(BaseModel):

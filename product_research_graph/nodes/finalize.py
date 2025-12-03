@@ -44,12 +44,30 @@ def finalize_node(state: ProductResearchState) -> dict:
     # Convert validated_pages to the expected format
     formatted_pages = []
     for page in validated_pages:
+        # Get weight data with defaults
+        weight = page.get("weight", {})
+        weight_formatted = {
+            "unit_of_measure": weight.get("unit_of_measure", "") if weight else "",
+            "value": weight.get("value") if weight else None,
+        }
+
+        # Get dimensions data with defaults
+        dimensions = page.get("product_dimensions", {})
+        dimensions_formatted = {
+            "length": dimensions.get("length") if dimensions else None,
+            "width": dimensions.get("width") if dimensions else None,
+            "height": dimensions.get("height") if dimensions else None,
+        }
+
         formatted_pages.append({
             "url": page.get("url", ""),
             "validation_method": page.get("validation_method", "unknown"),
             "image_urls": page.get("image_urls", []),
             "reasoning": page.get("reasoning", ""),
             "product_description": page.get("product_description", ""),
+            "brand": page.get("brand", ""),
+            "weight": weight_formatted,
+            "product_dimensions": dimensions_formatted,
         })
 
     # Deduplicate invalid_urls by URL while preserving structure

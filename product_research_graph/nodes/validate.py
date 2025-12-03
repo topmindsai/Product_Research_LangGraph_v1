@@ -16,7 +16,13 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langsmith import traceable
 from langgraph.prebuilt import create_react_agent
 
-from product_research_graph.state import ProductResearchState, ValidatedPageDict, InvalidUrlDict
+from product_research_graph.state import (
+    ProductResearchState,
+    ValidatedPageDict,
+    InvalidUrlDict,
+    WeightDict,
+    ProductDimensionsDict,
+)
 from product_research_graph.tools.mcp_tools import (
     get_zyte_scrape_tool,
     ZYTE_SCRAPE_TOOL_NAME,
@@ -101,6 +107,27 @@ def _parse_validation_results(raw_results: str | None) -> dict[str, Any] | None:
         logger.error(f"JSON decode error in validation results: {e}")
         logger.debug(f"Raw response (first 500 chars): {raw_results[:500] if raw_results else 'None'}")
         return None
+
+
+def _parse_weight(weight_data: dict | None) -> WeightDict:
+    """Parse weight data from LLM response."""
+    if not weight_data or not isinstance(weight_data, dict):
+        return WeightDict(unit_of_measure="", value=None)
+    return WeightDict(
+        unit_of_measure=weight_data.get("unit_of_measure", ""),
+        value=weight_data.get("value"),
+    )
+
+
+def _parse_dimensions(dimensions_data: dict | None) -> ProductDimensionsDict:
+    """Parse product dimensions from LLM response."""
+    if not dimensions_data or not isinstance(dimensions_data, dict):
+        return ProductDimensionsDict(length=None, width=None, height=None)
+    return ProductDimensionsDict(
+        length=dimensions_data.get("length"),
+        width=dimensions_data.get("width"),
+        height=dimensions_data.get("height"),
+    )
 
 
 async def _execute_validation_with_react_agent(
@@ -279,6 +306,9 @@ async def validate_node(state: ProductResearchState) -> dict:
                         image_urls=page.get("image_urls", []),
                         reasoning=page.get("reasoning", ""),
                         product_description=page.get("product_description", ""),
+                        brand=page.get("brand", ""),
+                        weight=_parse_weight(page.get("weight")),
+                        product_dimensions=_parse_dimensions(page.get("product_dimensions")),
                     )
                 )
 

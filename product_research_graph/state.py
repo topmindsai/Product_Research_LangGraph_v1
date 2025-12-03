@@ -48,6 +48,19 @@ class SearchConfigDict(TypedDict):
     prompt_key: str  # Key to look up prompt template
 
 
+class WeightDict(TypedDict):
+    """Product weight with unit of measure."""
+    unit_of_measure: str  # e.g., "lb", "oz", "kg", "g"
+    value: float | None  # Weight value, None if not found
+
+
+class ProductDimensionsDict(TypedDict):
+    """Product dimensions in inches."""
+    length: float | None  # Length in inches, None if not found
+    width: float | None   # Width in inches, None if not found
+    height: float | None  # Height in inches, None if not found
+
+
 class ValidatedPageDict(TypedDict):
     """A validated product page with extracted images."""
     url: str
@@ -55,6 +68,9 @@ class ValidatedPageDict(TypedDict):
     image_urls: list[str]
     reasoning: str  # Explanation of why this page was validated
     product_description: str  # Product description extracted from the page
+    brand: str  # Product brand name extracted from the page
+    weight: WeightDict  # Product weight with unit of measure
+    product_dimensions: ProductDimensionsDict  # Product dimensions in inches
 
 
 class InvalidUrlDict(TypedDict):

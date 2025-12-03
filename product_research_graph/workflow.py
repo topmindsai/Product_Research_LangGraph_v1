@@ -9,6 +9,8 @@ from product_research.schemas.models import (
     ValidationImageExtractionAgentSchema__Product,
     ValidationImageExtractionAgentSchema__ValidatedPagesItem,
     ValidationImageExtractionAgentSchema__InvalidUrlItem,
+    WeightSchema,
+    ProductDimensionsSchema,
 )
 from product_research_graph.state import create_initial_state
 from product_research_graph.agent import get_graph
@@ -71,6 +73,16 @@ async def run_workflow(product_input: ProductInput) -> ValidationImageExtraction
                 image_urls=page.get("image_urls", []),
                 reasoning=page.get("reasoning", ""),
                 product_description=page.get("product_description", ""),
+                brand=page.get("brand", ""),
+                weight=WeightSchema(
+                    unit_of_measure=page.get("weight", {}).get("unit_of_measure", ""),
+                    value=page.get("weight", {}).get("value"),
+                ),
+                product_dimensions=ProductDimensionsSchema(
+                    length=page.get("product_dimensions", {}).get("length"),
+                    width=page.get("product_dimensions", {}).get("width"),
+                    height=page.get("product_dimensions", {}).get("height"),
+                ),
             )
             for page in final_result.get("validated_pages", [])
         ]

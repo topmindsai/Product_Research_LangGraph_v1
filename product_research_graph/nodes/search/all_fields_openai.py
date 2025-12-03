@@ -71,12 +71,31 @@ async def search_all_fields_openai_node(state: ProductResearchState) -> dict:
 
                 if url:
                     urls_found.append(url)
+
+                    # Parse weight with defaults
+                    weight_data = item.get("weight", {})
+                    weight = {
+                        "unit_of_measure": weight_data.get("unit_of_measure", "") if weight_data else "",
+                        "value": weight_data.get("value") if weight_data else None,
+                    }
+
+                    # Parse dimensions with defaults
+                    dimensions_data = item.get("product_dimensions", {})
+                    dimensions = {
+                        "length": dimensions_data.get("length") if dimensions_data else None,
+                        "width": dimensions_data.get("width") if dimensions_data else None,
+                        "height": dimensions_data.get("height") if dimensions_data else None,
+                    }
+
                     validated_pages.append({
                         "url": url,
                         "validation_method": "all_fields_search",
                         "image_urls": image_urls,
                         "reasoning": "Validated via comprehensive all-fields OpenAI web search",
                         "product_description": item.get("product_description", ""),
+                        "brand": item.get("brand", ""),
+                        "weight": weight,
+                        "product_dimensions": dimensions,
                     })
                     total_images += len(image_urls)
 
