@@ -70,6 +70,7 @@ async def run_workflow(product_input: ProductInput) -> ValidationImageExtraction
                 validation_method=page.get("validation_method", "unknown"),
                 image_urls=page.get("image_urls", []),
                 reasoning=page.get("reasoning", ""),
+                product_description=page.get("product_description", ""),
             )
             for page in final_result.get("validated_pages", [])
         ]

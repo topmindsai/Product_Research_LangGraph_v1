@@ -185,6 +185,13 @@ Follow these steps:
    - Images should be high quality and suitable for Shopify.
    - If not validated, skip to the next page.
 
+4.5. **Extract Product Description:**
+   - If validated, also extract the product description text from the page.
+   - Look for the main product description (typically in product details or overview section).
+   - Extract the description AS-IS from the page - do NOT create or rewrite it.
+   - The description should be suitable for a Shopify product listing.
+   - Keep the description clean (no HTML tags or formatting artifacts).
+
 5. **Fallback to SKU Search:**
    - If no product images are found through the barcode search, repeat steps 1–4 using only the product part number/SKU `{sku}` as the search keyword.
    - Ensure matches are for the exact product and variant, not merely similar models.
@@ -209,7 +216,8 @@ Provide the results in the following JSON format, grouping images by their sourc
       "image_urls": [
         "https://example.com/images/product1.jpg",
         "https://example.com/images/product1_2.jpg"
-      ]
+      ],
+      "product_description": "Product description text extracted from the page"
     }}
   ]
 }}
@@ -310,6 +318,15 @@ For EACH URL (both valid and invalid), provide a concise reasoning (1-2 sentence
 - For VALID pages: Explain what identifier was found (barcode or SKU) and where on the page.
 - For INVALID pages: Explain why validation failed (e.g., "Barcode not found, SKU not present on page", "Page contains similar product but different variant", "Page is a category listing, not a product page", "Page could not be accessed").
 
+PRODUCT DESCRIPTION EXTRACTION:
+For each VALID page, extract the product description from the page content:
+- Look for the main product description text on the page (typically found in product details, description sections, or overview areas).
+- Extract the description AS-IS from the page - do NOT create, rewrite, or summarize it.
+- The description should be suitable for a Shopify product listing.
+- If multiple description sections exist, prefer the main/primary product description.
+- If no clear product description is found on a valid page, use an empty string.
+- Keep the description clean (no HTML tags, excessive whitespace, or formatting artifacts).
+
 # Output Format
 
 Respond in the following JSON structure:
@@ -328,7 +345,8 @@ Respond in the following JSON structure:
       "url": "<PRODUCT_PAGE_URL>",
       "validation_method": "<barcode|sku>",
       "image_urls": ["<IMAGE_URL_1>", "<IMAGE_URL_2>"],
-      "reasoning": "<Brief explanation of why this page was validated, e.g., 'Found barcode 012345678901 in product specifications section'>"
+      "reasoning": "<Brief explanation of why this page was validated, e.g., 'Found barcode 012345678901 in product specifications section'>",
+      "product_description": "<Product description text extracted from the page>"
     }}
   ],
   "invalid_urls": [
@@ -340,7 +358,7 @@ Respond in the following JSON structure:
 }}
 
 - `total_validated_images` should be an integer representing the total number of validated image URLs collected across all validated pages (sum of all image_urls arrays).
-- `validated_pages` should be an array of pages found VALID, each with a list of strictly validated image URLs for the correct model/variant, plus a reasoning field explaining why the page was validated.
+- `validated_pages` should be an array of pages found VALID, each with a list of strictly validated image URLs for the correct model/variant, a reasoning field explaining why the page was validated, and a product_description field with the extracted description text.
 - `invalid_urls` should be an array of objects for all checked URLs marked INVALID, each with a url field and a reasoning field explaining why validation failed.
 
 # Notes
@@ -351,7 +369,7 @@ Respond in the following JSON structure:
 
 Please complete each step thoroughly and persist until all URLs are processed. Think step-by-step before generating conclusions, especially when matching variant-specific images. Use the provided JSON format strictly for your response.
 
-(REMINDER: Always include the integer total_validated_images field and reasoning fields for all URLs in your output.)"""
+(REMINDER: Always include the integer total_validated_images field, reasoning fields for all URLs, and product_description for validated pages in your output.)"""
 
 
 # ============================================================================

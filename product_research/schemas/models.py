@@ -15,6 +15,7 @@ class ValidationImageExtractionAgentSchema__ValidatedPagesItem(BaseModel):
     validation_method: str
     image_urls: list[str]
     reasoning: str = ""  # Explanation of why this page was validated
+    product_description: str = ""  # Product description extracted from the page
 
 
 class ValidationImageExtractionAgentSchema__InvalidUrlItem(BaseModel):

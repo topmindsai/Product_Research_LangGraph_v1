@@ -54,6 +54,7 @@ class ValidatedPageDict(TypedDict):
     validation_method: str  # "barcode" or "sku"
     image_urls: list[str]
     reasoning: str  # Explanation of why this page was validated
+    product_description: str  # Product description extracted from the page
 
 
 class InvalidUrlDict(TypedDict):
