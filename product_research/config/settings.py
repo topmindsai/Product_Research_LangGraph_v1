@@ -62,3 +62,13 @@ class LangGraphConfig:
     # Graph execution settings
     # Default of 25 is insufficient for 8 search configs (26 steps needed)
     RECURSION_LIMIT = int(os.getenv("LANGGRAPH_RECURSION_LIMIT", "50"))
+
+    # Validation batch settings
+    # Process URLs in batches to prevent timeout issues
+    VALIDATION_BATCH_SIZE = int(os.getenv("VALIDATION_BATCH_SIZE", "3"))
+    # Base timeout (seconds) + per-URL timeout for dynamic calculation
+    VALIDATION_TIMEOUT_BASE = float(os.getenv("VALIDATION_TIMEOUT_BASE", "60.0"))
+    VALIDATION_TIMEOUT_PER_URL = float(os.getenv("VALIDATION_TIMEOUT_PER_URL", "180.0"))  # 3 min per URL
+    # Early exit - stop processing batches when images are found
+    # Set to "false" to always process all URLs regardless of results
+    VALIDATION_EARLY_EXIT = os.getenv("VALIDATION_EARLY_EXIT", "true").lower() == "true"

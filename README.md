@@ -332,11 +332,17 @@ The workflow returns a `ValidationImageExtractionAgentSchema` with the following
 Use the `scripts/get_traces.py` script to fetch and save LangSmith traces by trace ID:
 
 ```bash
-# Basic usage - fetch traces by trace ID
+# Basic usage - fetch traces by trace ID (default: JSONL format)
 python scripts/get_traces.py <trace_id>
 
 # Example with a specific trace ID
 python scripts/get_traces.py 01936f2a-1234-5678-abcd-ef0123456789
+
+# Export as JSON (single array with all traces)
+python scripts/get_traces.py <trace_id> --format json
+
+# Export as CSV (flattened tabular format)
+python scripts/get_traces.py <trace_id> -f csv
 
 # Specify a different project name
 python scripts/get_traces.py <trace_id> --project "My_Project"
@@ -353,9 +359,18 @@ python scripts/get_traces.py <trace_id> --delay 2.0
 | Argument | Short | Description |
 |----------|-------|-------------|
 | `trace_id` | - | **Required.** The LangSmith trace ID to fetch |
+| `--format` | `-f` | Output format: `jsonl`, `json`, or `csv` (default: `jsonl`) |
 | `--project` | `-p` | LangSmith project name (defaults to `LANGCHAIN_PROJECT` env var) |
 | `--output` | `-o` | Output directory for saved traces (defaults to `./traces/`) |
 | `--delay` | `-d` | Seconds to wait before fetching (default: 1.0) |
+
+**Output Formats:**
+
+| Format | Description |
+|--------|-------------|
+| `jsonl` | One JSON object per line (default) |
+| `json` | Single JSON array with all traces, indented |
+| `csv` | Flattened CSV with nested fields as JSON strings |
 
 **Prerequisites:**
 - `LANGCHAIN_API_KEY` must be set in your environment
