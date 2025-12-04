@@ -49,6 +49,19 @@ class ValidationImageExtractionAgentSchema(BaseModel):
     invalid_urls: list[ValidationImageExtractionAgentSchema__InvalidUrlItem]
 
 
+class ValidationResponseSchema(BaseModel):
+    """Structured output schema for validation agent response.
+
+    Used with LangGraph's create_react_agent response_format parameter
+    to enable OpenAI's built-in JSON schema enforcement.
+    """
+
+    total_checked: int
+    total_validated_images: int
+    validated_pages: list[ValidationImageExtractionAgentSchema__ValidatedPagesItem]
+    invalid_urls: list[ValidationImageExtractionAgentSchema__InvalidUrlItem]
+
+
 # Filter Agent Schema
 class FilterAgentSchema(BaseModel):
     urls: list[str]

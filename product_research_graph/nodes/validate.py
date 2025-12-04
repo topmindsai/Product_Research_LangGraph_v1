@@ -1,18 +1,18 @@
 """Validate node for the Product Research workflow.
 
 This module uses create_react_agent from langgraph.prebuilt for proper
-tool execution with the Zyte MCP tool.
+tool execution with the Zyte MCP tool. Uses LangGraph's response_format
+parameter for structured output with OpenAI's built-in JSON schema enforcement.
 """
 
 import asyncio
 import json
 import logging
-from typing import Any
 
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langsmith import traceable
 from langgraph.prebuilt import create_react_agent
 
@@ -25,16 +25,12 @@ from product_research_graph.state import (
 )
 from product_research_graph.tools.mcp_tools import (
     get_zyte_scrape_tool,
-    ZYTE_SCRAPE_TOOL_NAME,
     clear_mcp_caches,
     _is_mcp_connection_error,
 )
 from product_research_graph.prompts.templates import get_validation_prompt
-from product_research_graph.utils.parsing import (
-    extract_text_from_message,
-    extract_json_from_response,
-)
 from product_research.config.settings import LangGraphConfig
+from product_research.schemas.models import ValidationResponseSchema
 
 
 # Set up logging
@@ -82,75 +78,27 @@ def _create_validation_model():
         )
 
 
-def _parse_validation_results(raw_results: str | None) -> dict[str, Any] | None:
-    """Parse validation results from string to dict."""
-    if not raw_results:
-        return None
-
-    try:
-        # Extract JSON from response (handles reasoning text + markdown)
-        json_content = extract_json_from_response(raw_results)
-
-        if not json_content:
-            logger.warning("Could not extract JSON from validation response")
-            logger.debug(f"Raw response (first 500 chars): {raw_results[:500]}")
-            return None
-
-        parsed = json.loads(json_content)
-
-        # Validate structure
-        if isinstance(parsed, dict):
-            logger.info(f"Successfully parsed validation results")
-            return parsed
-
-        logger.warning("Parsed validation result is not a dict")
-        return None
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error in validation results: {e}")
-        logger.debug(f"Raw response (first 500 chars): {raw_results[:500] if raw_results else 'None'}")
-        return None
-
-
-def _parse_weight(weight_data: dict | None) -> WeightDict:
-    """Parse weight data from LLM response."""
-    if not weight_data or not isinstance(weight_data, dict):
-        return WeightDict(unit_of_measure="", value=None)
-    return WeightDict(
-        unit_of_measure=weight_data.get("unit_of_measure", ""),
-        value=weight_data.get("value"),
-    )
-
-
-def _parse_dimensions(dimensions_data: dict | None) -> ProductDimensionsDict:
-    """Parse product dimensions from LLM response."""
-    if not dimensions_data or not isinstance(dimensions_data, dict):
-        return ProductDimensionsDict(length=None, width=None, height=None)
-    return ProductDimensionsDict(
-        length=dimensions_data.get("length"),
-        width=dimensions_data.get("width"),
-        height=dimensions_data.get("height"),
-    )
-
-
 async def _execute_validation_with_react_agent(
     tool,
     prompt: str,
     urls_str: str,
     max_retries: int = 2,
-) -> str | None:
+) -> ValidationResponseSchema | None:
     """
-    Execute validation using a ReAct agent for proper tool execution.
+    Execute validation using a ReAct agent with structured output.
 
-    This uses LangGraph's create_react_agent which properly handles:
+    This uses LangGraph's create_react_agent with response_format parameter
+    which properly handles:
     - Tool binding to the model
     - Tool call execution
     - Multi-turn conversations
+    - Structured output via OpenAI's built-in JSON schema enforcement
 
     Includes retry logic for MCP connection errors (ClosedResourceError, etc.)
     which can occur when SSE streams are unexpectedly closed.
 
-    Returns None on failure instead of raising exceptions, allowing
-    graceful error handling in the workflow.
+    Returns:
+        ValidationResponseSchema on success, None on failure.
     """
     if tool is None:
         logger.error("Cannot execute ReAct agent without a tool")
@@ -160,13 +108,15 @@ async def _execute_validation_with_react_agent(
 
     for attempt in range(max_retries + 1):
         try:
-            # Create the model based on configuration (supports OpenAI and Anthropic)
+            # Create the model based on configuration (supports OpenAI, Anthropic, Gemini)
             model = _create_validation_model()
 
-            # Create a ReAct agent with the tool
+            # Create a ReAct agent with structured output
+            # response_format enables OpenAI's built-in JSON schema enforcement
             agent = create_react_agent(
                 model=model,
                 tools=[current_tool],
+                response_format=ValidationResponseSchema,
             )
 
             # Prepare the input messages
@@ -183,28 +133,18 @@ async def _execute_validation_with_react_agent(
                 timeout=120.0  # 2 minute timeout for validation
             )
 
-            # Extract the final response from the agent
-            response_messages = result.get("messages", [])
+            # Access the structured response directly (guaranteed to match schema)
+            structured_response = result.get("structured_response")
 
-            # Find the last AI message (the final response)
-            final_response = None
-            for msg in reversed(response_messages):
-                if isinstance(msg, AIMessage) and msg.content:
-                    # Skip tool call responses (they have tool_calls attribute)
-                    if not getattr(msg, 'tool_calls', None):
-                        final_response = extract_text_from_message(msg)
-                        break
+            if structured_response is not None:
+                logger.info(
+                    f"ReAct agent returned structured response with "
+                    f"{len(structured_response.validated_pages)} valid pages, "
+                    f"{structured_response.total_validated_images} images"
+                )
+                return structured_response
 
-            if final_response:
-                logger.info(f"ReAct agent returned validation response ({len(final_response)} chars)")
-                return final_response
-            else:
-                # If no plain AI message, get any content
-                for msg in reversed(response_messages):
-                    if isinstance(msg, AIMessage) and msg.content:
-                        return extract_text_from_message(msg)
-
-            logger.warning("ReAct agent returned no usable response")
+            logger.warning("ReAct agent returned no structured response")
             return None
 
         except asyncio.TimeoutError:
@@ -235,6 +175,39 @@ async def _execute_validation_with_react_agent(
     return None
 
 
+def _convert_to_validated_page_dict(
+    page: "ValidationImageExtractionAgentSchema__ValidatedPagesItem",
+) -> ValidatedPageDict:
+    """Convert Pydantic ValidatedPagesItem to TypedDict for state compatibility."""
+    return ValidatedPageDict(
+        url=page.url,
+        validation_method=page.validation_method,
+        image_urls=page.image_urls,
+        reasoning=page.reasoning,
+        product_description=page.product_description,
+        brand=page.brand,
+        weight=WeightDict(
+            unit_of_measure=page.weight.unit_of_measure,
+            value=page.weight.value,
+        ),
+        product_dimensions=ProductDimensionsDict(
+            length=page.product_dimensions.length,
+            width=page.product_dimensions.width,
+            height=page.product_dimensions.height,
+        ),
+    )
+
+
+def _convert_to_invalid_url_dict(
+    item: "ValidationImageExtractionAgentSchema__InvalidUrlItem",
+) -> InvalidUrlDict:
+    """Convert Pydantic InvalidUrlItem to TypedDict for state compatibility."""
+    return InvalidUrlDict(
+        url=item.url,
+        reasoning=item.reasoning,
+    )
+
+
 @traceable(name="validate_node")
 async def validate_node(state: ProductResearchState) -> dict:
     """
@@ -243,9 +216,12 @@ async def validate_node(state: ProductResearchState) -> dict:
     This node:
     1. Takes the filtered URLs from the previous node
     2. Gets the Zyte MCP tool with proper session management
-    3. Uses create_react_agent for proper tool execution
+    3. Uses create_react_agent with response_format for structured output
     4. Validates pages by looking for barcode or SKU
     5. Extracts image URLs from validated pages
+
+    Uses LangGraph's response_format parameter for OpenAI's built-in
+    JSON schema enforcement, eliminating manual JSON parsing.
 
     Args:
         state: Current workflow state with filtered URLs
@@ -293,16 +269,20 @@ async def validate_node(state: ProductResearchState) -> dict:
 
         if scrape_tool:
             logger.info(f"Got Zyte scrape tool: {scrape_tool.name}")
-            # Use ReAct agent for proper tool execution
-            raw_result = await _execute_validation_with_react_agent(
+            # Use ReAct agent with structured output
+            structured_result = await _execute_validation_with_react_agent(
                 tool=scrape_tool,
                 prompt=prompt,
                 urls_str=urls_str,
             )
         else:
-            # No scrape tool available, use model only (fallback)
+            # No scrape tool available, use model with structured output directly
             logger.warning("Zyte scrape tool not available, using model-only validation")
             model = _create_validation_model()
+
+            # Use with_structured_output for consistency
+            structured_model = model.with_structured_output(ValidationResponseSchema)
+
             messages = [
                 SystemMessage(content=prompt),
                 HumanMessage(
@@ -311,69 +291,44 @@ async def validate_node(state: ProductResearchState) -> dict:
                     "based on the URL patterns and provide your best assessment."
                 ),
             ]
-            response = await model.ainvoke(messages)
-            raw_result = extract_text_from_message(response)
+            structured_result = await structured_model.ainvoke(messages)
 
-        # Parse the results
-        parsed = _parse_validation_results(raw_result)
+        # Process structured result
+        if structured_result is not None:
+            logger.info(
+                f"Validation complete: {len(structured_result.validated_pages)} valid pages, "
+                f"{structured_result.total_validated_images} images"
+            )
 
-        if parsed:
-            validated_pages_raw = parsed.get("validated_pages", [])
-            invalid_urls_raw = parsed.get("invalid_urls", [])
-            total_validated_images = int(parsed.get("total_validated_images", 0))
+            # Convert Pydantic models to TypedDicts for state compatibility
+            validated_pages = [
+                _convert_to_validated_page_dict(page)
+                for page in structured_result.validated_pages
+            ]
 
-            logger.info(f"Parsed validation: {len(validated_pages_raw)} valid pages, {total_validated_images} images")
-
-            # Convert validated_pages to proper format
-            validated_pages: list[ValidatedPageDict] = []
-            for page in validated_pages_raw:
-                validated_pages.append(
-                    ValidatedPageDict(
-                        url=page.get("url", ""),
-                        validation_method=page.get("validation_method", "unknown"),
-                        image_urls=page.get("image_urls", []),
-                        reasoning=page.get("reasoning", ""),
-                        product_description=page.get("product_description", ""),
-                        brand=page.get("brand", ""),
-                        weight=_parse_weight(page.get("weight")),
-                        product_dimensions=_parse_dimensions(page.get("product_dimensions")),
-                    )
-                )
-
-            # Convert invalid_urls to proper format (handle both dict and string formats)
-            invalid_urls: list[InvalidUrlDict] = []
-            for item in invalid_urls_raw:
-                if isinstance(item, dict):
-                    invalid_urls.append(
-                        InvalidUrlDict(
-                            url=item.get("url", ""),
-                            reasoning=item.get("reasoning", ""),
-                        )
-                    )
-                elif isinstance(item, str):
-                    # Backward compatibility: handle plain strings
-                    invalid_urls.append(
-                        InvalidUrlDict(url=item, reasoning="No reasoning provided")
-                    )
+            invalid_urls = [
+                _convert_to_invalid_url_dict(item)
+                for item in structured_result.invalid_urls
+            ]
 
             # Return incremental counts (state uses `add` reducer for accumulation)
             return {
                 "validated_pages": validated_pages,
                 "invalid_urls": invalid_urls,
-                "total_validated_images": total_validated_images,  # Images found in THIS validation
-                "total_checked": len(filtered_urls),  # URLs checked in THIS validation
+                "total_validated_images": structured_result.total_validated_images,
+                "total_checked": structured_result.total_checked,
             }
 
-        # Parsing failed
-        logger.warning("Failed to parse validation results")
+        # Structured output failed
+        logger.warning("Failed to get structured validation results")
         return {
             "validated_pages": [],
             "invalid_urls": [
-                InvalidUrlDict(url=url, reasoning="Validation parsing failed")
+                InvalidUrlDict(url=url, reasoning="Validation failed to return structured response")
                 for url in filtered_urls
             ],
-            "total_validated_images": 0,  # No images found (add 0)
-            "total_checked": len(filtered_urls),  # URLs checked in THIS validation
+            "total_validated_images": 0,
+            "total_checked": len(filtered_urls),
         }
 
     except Exception as e:
@@ -384,6 +339,6 @@ async def validate_node(state: ProductResearchState) -> dict:
                 InvalidUrlDict(url=url, reasoning=f"Validation error: {str(e)}")
                 for url in filtered_urls
             ],
-            "total_validated_images": 0,  # No images found (add 0)
-            "total_checked": len(filtered_urls),  # URLs checked in THIS validation
+            "total_validated_images": 0,
+            "total_checked": len(filtered_urls),
         }
