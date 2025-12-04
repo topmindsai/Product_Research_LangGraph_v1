@@ -154,11 +154,6 @@ Return your answer **EXCLUSIVELY** as a JSON object matching this schema (do not
 
 SEARCH_ALL_FIELDS_TEMPLATE = """Your task is to search the web to find product images by barcode, product SKU, or product title, validate the images and sources, and output a structured list of image URLs with their source URLs.
 
-Product Information:
-- Barcode/UPC: {barcode}
-- SKU/Part Number: {sku}
-- Title: {title}
-
 Follow these steps:
 
 1. **Barcode Search:**
@@ -202,19 +197,43 @@ Follow these steps:
 
 Provide the results in the following JSON format, grouping images by their source page:
 ```json
-{{
-  "items": [
-    {{
-      "source_url": "https://example.com/productpage1",
-      "image_urls": [
-        "https://example.com/images/product1.jpg",
-        "https://example.com/images/product1_2.jpg"
-      ]
-    }}
-  ]
-}}
+[
+  {{
+    "source_url": "https://example.com/productpage1",
+    "image_urls": [
+      "https://example.com/images/product1.jpg",
+      "https://example.com/images/product1_2.jpg"
+    ]
+  }},
+  {{
+    "source_url": "https://another-source.com/item",
+    "image_urls": [
+      "https://another-source.com/product_img.jpg"
+    ]
+  }}
+]
 ```
-If no valid product images and sources were found after all three search methods, return: {{ "items": [] }}
+If no valid product images and sources were found after all three search methods, return an empty array `[]`.
+
+# Examples
+
+**Example Output if valid images are found:**
+```json
+[
+  {{
+    "source_url": "https://shopA.com/product/123",
+    "image_urls": [
+      "https://shopA.com/files/prod123_main.jpg",
+      "https://shopA.com/files/prod123_side.jpg"
+    ]
+  }}
+]
+```
+
+**Example Output if no results are found:**
+```json
+[]
+```
 
 # Notes
 
@@ -229,7 +248,8 @@ If no valid product images and sources were found after all three search methods
 - Persist until all three search approaches are exhausted or valid images are found.
 
 **Reminder:**
-Always reason through the validation steps before concluding that a product image should be included in the output. Follow the instructions and output format exactly for consistent results."""
+Always reason through the validation steps before concluding that a product image should be included in the output. Follow the instructions and output format exactly for consistent results.
+This is the product: Barcode/UPC: {barcode}, Product SKU/part number: {sku}, Title: {title}"""
 
 
 # ============================================================================
@@ -305,6 +325,41 @@ After marking a page as VALID, perform image extraction while complying with ALL
     - Avoid "lifestyle" images and focus on images showing the actual item alone, unless all images are lifestyle and none of the actual product are present.
 - **URL Requirements:** Only extract direct image URLs (ending in .jpg, .jpeg, .png, .webp, etc.).
 
+REASONING REQUIREMENTS:
+For EACH URL (both valid and invalid), provide a concise reasoning (1-2 sentences) explaining your decision:
+- For VALID pages: Explain what identifier was found (barcode or SKU) and where on the page.
+- For INVALID pages: Explain why validation failed (e.g., "Barcode not found, SKU not present on page", "Page contains similar product but different variant", "Page is a category listing, not a product page", "Page could not be accessed").
+
+PRODUCT DESCRIPTION EXTRACTION:
+For each VALID page, extract the product description from the page content:
+- Look for the main product description text on the page (typically found in product details, description sections, or overview areas).
+- Extract the description AS-IS from the page - do NOT create, rewrite, or summarize it.
+- The description should be suitable for a Shopify product listing.
+- If multiple description sections exist, prefer the main/primary product description.
+- If no clear product description is found on a valid page, use an empty string.
+- Keep the description clean (no HTML tags, excessive whitespace, or formatting artifacts).
+
+PRODUCT DATA EXTRACTION:
+For each VALID page, extract the following product data from the page content:
+
+1. **Brand**: Extract the product brand/manufacturer name.
+   - Look for brand names in product titles, descriptions, or brand-specific sections.
+   - Extract the brand name AS-IS from the page.
+   - If no brand is found, use an empty string.
+
+2. **Weight**: Extract the product weight with its unit of measure.
+   - Look for weight information in product specifications, details, or shipping info.
+   - Extract the numeric value and the unit of measure (e.g., "lb", "oz", "kg", "g").
+   - If weight is not found, use null for the value and empty string for unit.
+
+3. **Product Dimensions**: Extract product dimensions in INCHES.
+   - Look for dimensions in product specifications, details, or shipping info.
+   - Extract length, width, and height values.
+   - If dimensions are in other units (cm, mm), convert them to inches.
+   - If any dimension is not found, use null for that value.
+
+IMPORTANT: Do NOT make up values. Only extract data that is explicitly present on the page. Use empty/null values when data is not found.
+
 # Output Format
 
 Respond in the following JSON structure:
@@ -322,15 +377,38 @@ Respond in the following JSON structure:
     {{
       "url": "<PRODUCT_PAGE_URL>",
       "validation_method": "<barcode|sku>",
-      "image_urls": ["<IMAGE_URL_1>", "<IMAGE_URL_2>"]
+      "image_urls": ["<IMAGE_URL_1>", "<IMAGE_URL_2>"],
+      "reasoning": "<Brief explanation of why this page was validated, e.g., 'Found barcode 012345678901 in product specifications section'>",
+      "product_description": "<Product description text extracted from the page>",
+      "brand": "<Brand name extracted from the page, or empty string if not found>",
+      "weight": {{
+        "unit_of_measure": "<unit like lb, oz, kg, g, or empty string if not found>",
+        "value": <numeric value or null if not found>
+      }},
+      "product_dimensions": {{
+        "length": <length in inches or null if not found>,
+        "width": <width in inches or null if not found>,
+        "height": <height in inches or null if not found>
+      }}
     }}
   ],
-  "invalid_urls": ["<INVALID_URL_1>", "<INVALID_URL_2>"]
+  "invalid_urls": [
+    {{
+      "url": "<INVALID_URL>",
+      "reasoning": "<Brief explanation of why validation failed, e.g., 'Page is a search results listing, no product details found'>"
+    }}
+  ]
 }}
 
 - `total_validated_images` should be an integer representing the total number of validated image URLs collected across all validated pages (sum of all image_urls arrays).
-- `validated_pages` should be an array of pages found VALID, each with a list of strictly validated image URLs for the correct model/variant.
-- `invalid_urls` should list all checked URLs marked INVALID.
+- `validated_pages` should be an array of pages found VALID, each with:
+  - `image_urls`: list of strictly validated image URLs for the correct model/variant
+  - `reasoning`: explanation of why the page was validated
+  - `product_description`: extracted description text
+  - `brand`: brand/manufacturer name (empty string if not found)
+  - `weight`: object with `unit_of_measure` and `value` (null if not found)
+  - `product_dimensions`: object with `length`, `width`, `height` in inches (null if not found)
+- `invalid_urls` should be an array of objects for all checked URLs marked INVALID, each with a url field and a reasoning field explaining why validation failed.
 
 # Notes
 
@@ -340,7 +418,7 @@ Respond in the following JSON structure:
 
 Please complete each step thoroughly and persist until all URLs are processed. Think step-by-step before generating conclusions, especially when matching variant-specific images. Use the provided JSON format strictly for your response.
 
-(REMINDER: Always include the integer total_validated_images field in your output, accurately summing all validated image URLs collected.)"""
+(REMINDER: Always include total_validated_images, reasoning, product_description, brand, weight, and product_dimensions for validated pages. Do NOT make up values - use empty/null when data is not found on the page.)"""
 
 
 # ============================================================================

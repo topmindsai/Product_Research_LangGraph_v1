@@ -14,6 +14,20 @@ def merge_lists(left: list, right: list) -> list:
     return left + right
 
 
+def merge_invalid_urls(left: list[dict], right: list[dict]) -> list[dict]:
+    """Reducer that merges invalid URL dicts, deduplicating by URL."""
+    if not left:
+        return right
+    if not right:
+        return left
+    seen_urls: dict[str, dict] = {}
+    for item in left + right:
+        url = item.get("url", "")
+        if url and url not in seen_urls:
+            seen_urls[url] = item
+    return list(seen_urls.values())
+
+
 class ProductResearchInputState(TypedDict):
     """Input schema - only the fields required to start the workflow."""
     barcode: NotRequired[str]  # Optional - can be empty
@@ -34,11 +48,35 @@ class SearchConfigDict(TypedDict):
     prompt_key: str  # Key to look up prompt template
 
 
+class WeightDict(TypedDict):
+    """Product weight with unit of measure."""
+    unit_of_measure: str  # e.g., "lb", "oz", "kg", "g"
+    value: float | None  # Weight value, None if not found
+
+
+class ProductDimensionsDict(TypedDict):
+    """Product dimensions in inches."""
+    length: float | None  # Length in inches, None if not found
+    width: float | None   # Width in inches, None if not found
+    height: float | None  # Height in inches, None if not found
+
+
 class ValidatedPageDict(TypedDict):
     """A validated product page with extracted images."""
     url: str
     validation_method: str  # "barcode" or "sku"
     image_urls: list[str]
+    reasoning: str  # Explanation of why this page was validated
+    product_description: str  # Product description extracted from the page
+    brand: str  # Product brand name extracted from the page
+    weight: WeightDict  # Product weight with unit of measure
+    product_dimensions: ProductDimensionsDict  # Product dimensions in inches
+
+
+class InvalidUrlDict(TypedDict):
+    """An invalid URL with reasoning for why it was invalidated."""
+    url: str
+    reasoning: str
 
 
 class ProductResearchState(TypedDict):
@@ -70,8 +108,12 @@ class ProductResearchState(TypedDict):
     # ===== Validation State =====
     total_validated_images: Annotated[int, add]              # Total images found (accumulates)
     validated_pages: Annotated[list[ValidatedPageDict], merge_lists]  # Accumulates
-    invalid_urls: Annotated[list[str], merge_lists]          # Accumulates
+    invalid_urls: Annotated[list[InvalidUrlDict], merge_invalid_urls]  # Accumulates
     total_checked: Annotated[int, add]                       # URLs checked so far (accumulates)
+
+    # ===== Image Cleanup State =====
+    cleaned_validated_pages: list[ValidatedPageDict]    # Cleaned pages (overwrites each iteration)
+    cleaned_total_validated_images: int                 # Corrected count (overwrites each iteration)
 
     # ===== Final Output =====
     final_result: dict[str, Any] | None  # Final output matching schema
@@ -101,6 +143,9 @@ def create_initial_state(barcode: str, sku: str, title: str) -> ProductResearchS
         validated_pages=[],
         invalid_urls=[],
         total_checked=0,
+        # Image cleanup state
+        cleaned_validated_pages=[],
+        cleaned_total_validated_images=0,
         # Final output
         final_result=None,
     )

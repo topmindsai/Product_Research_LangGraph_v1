@@ -12,6 +12,7 @@ This application uses LangGraph to orchestrate a multi-node workflow that search
 - **Multiple Search Sources**: Google, Yahoo, and OpenAI web search via MCP tools
 - **8-Step Search Strategy**: Sequential fallback from barcode → SKU → title+SKU combinations
 - **Strict Image Validation**: Ensures images match exact product variants (not similar products)
+- **Rich Data Extraction**: Extracts product descriptions, brand, weight, and dimensions from validated pages
 - **Batch Processing**: Process CSV/Excel files with concurrent execution
 - **Dual-Mode Execution**: Run as REST API server or CLI tool
 - **Structured Output**: Pydantic-validated JSON responses
@@ -31,8 +32,8 @@ Product_Research_Agent_v2/
 │   ├── nodes/                  # Graph nodes
 │   │   ├── initialize.py       # Setup search configs
 │   │   ├── filter.py           # URL filtering via LLM
-│   │   ├── validate.py         # Image validation & extraction
-│   │   ├── finalize.py         # Format final output
+│   │   ├── validate.py         # Image validation & data extraction
+│   │   ├── finalize.py         # Format final output with all extracted data
 │   │   └── search/             # 8 search strategy nodes + dispatcher
 │   ├── tools/                  # MCP tool wrappers
 │   │   └── mcp_tools.py        # Google, Yahoo, OpenAI search tools
@@ -178,6 +179,11 @@ async def main():
 
     for page in result.validated_pages:
         print(f"  Source: {page.url}")
+        print(f"  Reasoning: {page.reasoning}")
+        print(f"  Brand: {page.brand}")
+        print(f"  Description: {page.product_description[:100]}...")
+        print(f"  Weight: {page.weight.value} {page.weight.unit_of_measure}")
+        print(f"  Dimensions: {page.product_dimensions.length}L x {page.product_dimensions.width}W x {page.product_dimensions.height}H")
         for img in page.image_urls:
             print(f"    - {img}")
 
@@ -246,9 +252,59 @@ START
 5. SKU + Yahoo Search
 6. SKU + OpenAI Web Search
 7. Title+SKU + Google Search
-8. All Fields + OpenAI Web Search
+8. All Fields + OpenAI Web Search (routes directly to finalize, bypassing filter/validate)
 
 The workflow stops on the first successful image extraction (≥1 validated image) or after exhausting all configurations.
+
+**Extracted Data from Validated Pages:**
+- Image URLs (Shopify-ready)
+- Validation reasoning (why the page was validated)
+- Product description
+- Brand name
+- Weight (with unit of measure)
+- Product dimensions (length, width, height in inches)
+
+## Output Schema
+
+The workflow returns a `ValidationImageExtractionAgentSchema` with the following structure:
+
+```python
+{
+    "product": {
+        "barcode": "032054072245",
+        "sku": "DANI-SQDR45115",
+        "title": "Danielson SQDR45115 Squid Rigged"
+    },
+    "search_type": "barcode",
+    "total_checked": 5,
+    "total_validated_images": 3,
+    "validated_pages": [
+        {
+            "url": "https://example.com/product",
+            "validation_method": "barcode",
+            "image_urls": ["https://example.com/image1.jpg"],
+            "reasoning": "Page contains matching barcode 032054072245",
+            "product_description": "High-quality squid rigged bait...",
+            "brand": "Danielson",
+            "weight": {
+                "unit_of_measure": "oz",
+                "value": 2.5
+            },
+            "product_dimensions": {
+                "length": 4.5,
+                "width": 1.0,
+                "height": 0.5
+            }
+        }
+    ],
+    "invalid_urls": [
+        {
+            "url": "https://example.com/wrong-product",
+            "reasoning": "Page shows different SKU variant"
+        }
+    ]
+}
+```
 
 ## API Endpoints
 

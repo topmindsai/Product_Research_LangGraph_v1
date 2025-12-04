@@ -8,6 +8,9 @@ from product_research.schemas.models import (
     ValidationImageExtractionAgentSchema,
     ValidationImageExtractionAgentSchema__Product,
     ValidationImageExtractionAgentSchema__ValidatedPagesItem,
+    ValidationImageExtractionAgentSchema__InvalidUrlItem,
+    WeightSchema,
+    ProductDimensionsSchema,
 )
 from product_research_graph.state import create_initial_state
 from product_research_graph.agent import get_graph
@@ -62,14 +65,35 @@ async def run_workflow(product_input: ProductInput) -> ValidationImageExtraction
     final_result = result.get("final_result")
 
     if final_result:
-        # Convert to Pydantic model
+        # Convert validated_pages to Pydantic models
         validated_pages = [
             ValidationImageExtractionAgentSchema__ValidatedPagesItem(
                 url=page.get("url", ""),
                 validation_method=page.get("validation_method", "unknown"),
                 image_urls=page.get("image_urls", []),
+                reasoning=page.get("reasoning", ""),
+                product_description=page.get("product_description", ""),
+                brand=page.get("brand", ""),
+                weight=WeightSchema(
+                    unit_of_measure=page.get("weight", {}).get("unit_of_measure", ""),
+                    value=page.get("weight", {}).get("value"),
+                ),
+                product_dimensions=ProductDimensionsSchema(
+                    length=page.get("product_dimensions", {}).get("length"),
+                    width=page.get("product_dimensions", {}).get("width"),
+                    height=page.get("product_dimensions", {}).get("height"),
+                ),
             )
             for page in final_result.get("validated_pages", [])
+        ]
+
+        # Convert invalid_urls to Pydantic models (handle both dict and string formats)
+        invalid_urls = [
+            ValidationImageExtractionAgentSchema__InvalidUrlItem(
+                url=item.get("url", "") if isinstance(item, dict) else item,
+                reasoning=item.get("reasoning", "") if isinstance(item, dict) else "",
+            )
+            for item in final_result.get("invalid_urls", [])
         ]
 
         return ValidationImageExtractionAgentSchema(
@@ -82,7 +106,7 @@ async def run_workflow(product_input: ProductInput) -> ValidationImageExtraction
             total_checked=final_result.get("total_checked", 0),
             total_validated_images=final_result.get("total_validated_images", 0),
             validated_pages=validated_pages,
-            invalid_urls=final_result.get("invalid_urls", []),
+            invalid_urls=invalid_urls,
         )
 
     # Return empty result if no final_result

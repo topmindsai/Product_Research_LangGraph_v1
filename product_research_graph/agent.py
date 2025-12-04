@@ -13,6 +13,7 @@ from product_research_graph.nodes import (
     initialize_node,
     filter_node,
     validate_node,
+    image_urls_cleanup_node,
     finalize_node,
 )
 from product_research_graph.nodes.search import (
@@ -59,7 +60,12 @@ def should_continue_search(state: ProductResearchState) -> Literal["continue", "
     Returns:
         "continue" to try the next search config, "done" to finalize
     """
-    total_validated_images = state.get("total_validated_images", 0)
+    # Use cleaned count if available (from image_urls_cleanup node),
+    # otherwise fall back to original count
+    cleaned_count = state.get("cleaned_total_validated_images")
+    total_validated_images = (
+        cleaned_count if cleaned_count is not None else state.get("total_validated_images", 0)
+    )
     search_index = state.get("search_index", 0)
     search_configs = state.get("search_configs", [])
 
@@ -87,24 +93,25 @@ def create_product_research_graph() -> StateGraph:
     initialize
       │
       ▼
-    search_dispatcher ◄───────────────────────────────────┐
-      │ (routes based on search_index)                    │
-      ├─► search_barcode_google ──┐                       │
-      ├─► search_barcode_yahoo ───┤                       │
-      ├─► search_barcode_openai ──┤                       │
-      ├─► search_sku_google ──────┤                       │
-      ├─► search_sku_yahoo ───────┼──► filter ──► validate ──► should_continue?
-      ├─► search_sku_openai ──────┤                       │         │
-      ├─► search_title_sku_google ┘                       │    (continue)
-      │                                                   └─────────┘
-      │                                                         │
-      └─► search_all_fields_openai ─────────────────────┐     (done)
-                                                        │       │
-                                                        ▼       ▼
-                                                        finalize
-                                                            │
-                                                            ▼
-                                                           END
+    search_dispatcher ◄─────────────────────────────────────────────────┐
+      │ (routes based on search_index)                                  │
+      ├─► search_barcode_google ──┐                                     │
+      ├─► search_barcode_yahoo ───┤                                     │
+      ├─► search_barcode_openai ──┤                                     │
+      ├─► search_sku_google ──────┤                                     │
+      ├─► search_sku_yahoo ───────┼──► filter ──► validate ──► image_urls_cleanup
+      ├─► search_sku_openai ──────┤                                     │
+      ├─► search_title_sku_google ┘                             should_continue?
+      │                                                                 │
+      │                                                  ┌──────────────┴──────────┐
+      │                                             (continue)                  (done)
+      │                                                  │                         │
+      └──────────────────────────────────────────────────┘                         │
+      │                                                                            │
+      └─► search_all_fields_openai ──────────────────────────────────────► finalize
+                                                                               │
+                                                                               ▼
+                                                                              END
 
     Note: search_all_fields_openai routes directly to finalize (skips filter/validate)
           as a last-resort search that passes URLs as-is without image extraction.
@@ -124,6 +131,7 @@ def create_product_research_graph() -> StateGraph:
     workflow.add_node("initialize", initialize_node)
     workflow.add_node("filter", filter_node)
     workflow.add_node("validate", validate_node)
+    workflow.add_node("image_urls_cleanup", image_urls_cleanup_node)
     workflow.add_node("finalize", finalize_node)
 
     # Add nodes - search dispatcher (uses Command for routing)
@@ -155,12 +163,13 @@ def create_product_research_graph() -> StateGraph:
     # search_all_fields_openai routes directly to finalize (last resort search)
     workflow.add_edge("search_all_fields_openai", "finalize")
 
-    # Add edges - filter to validate
+    # Add edges - filter to validate to image_urls_cleanup
     workflow.add_edge("filter", "validate")
+    workflow.add_edge("validate", "image_urls_cleanup")
 
-    # Add conditional edge for the search loop
+    # Add conditional edge for the search loop (after image cleanup)
     workflow.add_conditional_edges(
-        "validate",
+        "image_urls_cleanup",
         should_continue_search,
         {
             "continue": "search_dispatcher",  # Go back to dispatcher for next search

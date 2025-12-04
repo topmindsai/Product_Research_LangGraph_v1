@@ -22,6 +22,8 @@ from product_research_graph.state import ProductResearchState
 from product_research_graph.tools.mcp_tools import (
     get_google_search_tool,
     get_yahoo_search_tool,
+    clear_mcp_caches,
+    _is_mcp_connection_error,
 )
 from product_research_graph.prompts.templates import get_search_prompt
 from product_research_graph.config import get_tool_display_name
@@ -29,6 +31,7 @@ from product_research_graph.utils.parsing import (
     extract_text_from_message,
     extract_json_from_response,
 )
+from product_research.schemas.models import AllFieldsSearchResponseSchema
 
 
 # Set up logging
@@ -102,6 +105,8 @@ async def _execute_search_with_react_agent(
     tool,
     prompt: str,
     search_input: str,
+    tool_type: str | None = None,
+    max_retries: int = 2,
 ) -> str | None:
     """
     Execute a search using a ReAct agent for proper tool execution.
@@ -111,6 +116,9 @@ async def _execute_search_with_react_agent(
     - Tool call execution
     - Result extraction
 
+    Includes retry logic for MCP connection errors (ClosedResourceError, etc.)
+    which can occur when SSE streams are unexpectedly closed.
+
     Returns None on failure instead of raising exceptions, allowing
     graceful fallback to the next search config.
     """
@@ -118,66 +126,88 @@ async def _execute_search_with_react_agent(
         logger.error("Cannot execute ReAct agent without a tool")
         return None
 
-    try:
-        # Create the model with Responses API
-        model = ChatOpenAI(
-            model="gpt-5-mini",
-            temperature=0,
-            use_responses_api=True,
-            output_version="responses/v1",
-        )
+    current_tool = tool
 
-        # Create a ReAct agent with the tool
-        agent = create_react_agent(
-            model=model,
-            tools=[tool],
-        )
+    for attempt in range(max_retries + 1):
+        try:
+            # Create the model with Responses API
+            model = ChatOpenAI(
+                model="gpt-5-mini",
+                temperature=0,
+                use_responses_api=True,
+                output_version="responses/v1",
+            )
 
-        # Prepare the input messages
-        messages = [
-            SystemMessage(content=prompt),
-            HumanMessage(content=search_input),
-        ]
+            # Create a ReAct agent with the tool
+            agent = create_react_agent(
+                model=model,
+                tools=[current_tool],
+            )
 
-        logger.info(f"Invoking ReAct agent with tool: {tool.name}")
+            # Prepare the input messages
+            messages = [
+                SystemMessage(content=prompt),
+                HumanMessage(content=search_input),
+            ]
 
-        # Invoke the agent with timeout protection
-        result = await asyncio.wait_for(
-            agent.ainvoke({"messages": messages}),
-            timeout=60.0  # 60 second timeout for entire agent execution
-        )
+            logger.info(f"Invoking ReAct agent with tool: {current_tool.name} (attempt {attempt + 1}/{max_retries + 1})")
 
-        # Extract the final response from the agent
-        response_messages = result.get("messages", [])
+            # Invoke the agent with timeout protection
+            result = await asyncio.wait_for(
+                agent.ainvoke({"messages": messages}),
+                timeout=60.0  # 60 second timeout for entire agent execution
+            )
 
-        # Find the last AI message (the final response)
-        final_response = None
-        for msg in reversed(response_messages):
-            if isinstance(msg, AIMessage) and msg.content:
-                # Skip tool call responses (they have tool_calls attribute)
-                if not getattr(msg, 'tool_calls', None):
-                    final_response = extract_text_from_message(msg)
-                    break
+            # Extract the final response from the agent
+            response_messages = result.get("messages", [])
 
-        if final_response:
-            logger.info(f"ReAct agent returned response ({len(final_response)} chars)")
-            return final_response
-        else:
-            # If no plain AI message, get any content
+            # Find the last AI message (the final response)
+            final_response = None
             for msg in reversed(response_messages):
                 if isinstance(msg, AIMessage) and msg.content:
-                    return extract_text_from_message(msg)
+                    # Skip tool call responses (they have tool_calls attribute)
+                    if not getattr(msg, 'tool_calls', None):
+                        final_response = extract_text_from_message(msg)
+                        break
 
-        logger.warning("ReAct agent returned no usable response")
-        return None
+            if final_response:
+                logger.info(f"ReAct agent returned response ({len(final_response)} chars)")
+                return final_response
+            else:
+                # If no plain AI message, get any content
+                for msg in reversed(response_messages):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        return extract_text_from_message(msg)
 
-    except asyncio.TimeoutError:
-        logger.error("ReAct agent execution timed out after 60 seconds")
-        return None
-    except Exception as e:
-        # Log but DON'T re-raise - return None for graceful degradation
-        logger.error(f"ReAct agent execution failed: {e}")
-        return None
+            logger.warning("ReAct agent returned no usable response")
+            return None
+
+        except asyncio.TimeoutError:
+            logger.error("ReAct agent execution timed out after 60 seconds")
+            return None
+        except Exception as e:
+            # Check if this is an MCP connection error that should be retried
+            if _is_mcp_connection_error(e) and attempt < max_retries and tool_type:
+                logger.warning(
+                    f"MCP connection error in ReAct agent search (attempt {attempt + 1}/{max_retries + 1}): {e}"
+                )
+                logger.info("Clearing MCP cache and retrying with fresh connection...")
+                await clear_mcp_caches()
+                # Get fresh tool after clearing cache
+                fresh_tool = await _get_tool_for_type(tool_type)
+                if fresh_tool:
+                    current_tool = fresh_tool
+                    await asyncio.sleep(0.5)  # Brief delay before retry
+                    continue
+                else:
+                    logger.error(f"Failed to get fresh {tool_type} tool after cache clear")
+                    return None
+            else:
+                # Log but DON'T re-raise - return None for graceful degradation
+                logger.error(f"ReAct agent execution failed: {e}")
+                return None
+
+    return None
 
 
 async def _execute_openai_search(
@@ -207,6 +237,72 @@ async def _execute_openai_search(
         return extract_text_from_message(response)
     except Exception as e:
         logger.error(f"OpenAI search error: {e}")
+        return None
+
+
+async def execute_openai_search_structured(
+    prompt: str,
+    query: str,
+) -> AllFieldsSearchResponseSchema | None:
+    """
+    Execute search using OpenAI with native web_search + structured output.
+
+    Combines both OpenAI capabilities in a single LLM call:
+    - web_search_preview: Built-in web search tool (server-side execution)
+    - response_format: Native JSON schema enforcement
+
+    This provides:
+    - Guaranteed schema compliance via OpenAI's constrained decoding
+    - No manual JSON parsing required
+    - Type-safe Pydantic object returned directly
+
+    Args:
+        prompt: System prompt with search instructions
+        query: User query with product information
+
+    Returns:
+        AllFieldsSearchResponseSchema on success, None on failure
+    """
+    try:
+        # Create model with Responses API, web search tool, AND structured output
+        model = ChatOpenAI(
+            model="gpt-5.1",
+            temperature=0,
+            use_responses_api=True,
+            output_version="responses/v1",
+            model_kwargs={"reasoning": {"effort": "high"}},
+        ).bind_tools(
+            [{"type": "web_search_preview"}],
+            response_format=AllFieldsSearchResponseSchema,
+            strict=True,
+        )
+
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=query),
+        ]
+
+        logger.info("Executing OpenAI search with native web_search + structured output")
+        response = await model.ainvoke(messages)
+
+        # Per LangChain docs: with bind_tools(..., response_format=Schema),
+        # the parsed Pydantic object is in response.additional_kwargs["parsed"]
+        if hasattr(response, "additional_kwargs"):
+            parsed = response.additional_kwargs.get("parsed")
+            if isinstance(parsed, AllFieldsSearchResponseSchema):
+                logger.info(f"Structured search returned {len(parsed.items)} items")
+                return parsed
+
+        # Fallback: check if response itself is the schema (defensive)
+        if isinstance(response, AllFieldsSearchResponseSchema):
+            logger.info(f"Structured search returned {len(response.items)} items")
+            return response
+
+        logger.warning(f"OpenAI structured search returned unexpected response type: {type(response)}")
+        return None
+
+    except Exception as e:
+        logger.error(f"OpenAI structured search error: {e}")
         return None
 
 
@@ -314,6 +410,7 @@ async def execute_search(
                         tool=tool,
                         prompt=prompt,
                         search_input=search_input,
+                        tool_type=tool_type,  # Pass tool_type for retry logic
                     )
                 else:
                     # Tool not available - this is a critical error now
