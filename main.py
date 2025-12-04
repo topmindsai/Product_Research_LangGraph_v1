@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import os
 
 import uvicorn
 
@@ -35,8 +36,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Server port (default: 8000)"
+        default=int(os.getenv("PORT", "8000")),
+        help="Server port (default: 8000, or PORT env var for Railway)"
     )
 
     args = parser.parse_args()
