@@ -154,11 +154,6 @@ Return your answer **EXCLUSIVELY** as a JSON object matching this schema (do not
 
 SEARCH_ALL_FIELDS_TEMPLATE = """Your task is to search the web to find product images by barcode, product SKU, or product title, validate the images and sources, and output a structured list of image URLs with their source URLs.
 
-Product Information:
-- Barcode/UPC: {barcode}
-- SKU/Part Number: {sku}
-- Title: {title}
-
 Follow these steps:
 
 1. **Barcode Search:**
@@ -185,22 +180,6 @@ Follow these steps:
    - Images should be high quality and suitable for Shopify.
    - If not validated, skip to the next page.
 
-4.5. **Extract Product Description:**
-   - If validated, also extract the product description text from the page.
-   - Look for the main product description (typically in product details or overview section).
-   - Extract the description AS-IS from the page - do NOT create or rewrite it.
-   - The description should be suitable for a Shopify product listing.
-   - Keep the description clean (no HTML tags or formatting artifacts).
-
-4.6. **Extract Product Data:**
-   - If validated, also extract:
-     - Brand name from the page
-     - Product weight (value and unit of measure)
-     - Product dimensions in inches (length, width, height)
-   - Only extract data that is explicitly present on the page.
-   - Do NOT make up values - use empty/null when not found.
-   - If dimensions are in cm/mm, convert them to inches.
-
 5. **Fallback to SKU Search:**
    - If no product images are found through the barcode search, repeat steps 1–4 using only the product part number/SKU `{sku}` as the search keyword.
    - Ensure matches are for the exact product and variant, not merely similar models.
@@ -218,31 +197,43 @@ Follow these steps:
 
 Provide the results in the following JSON format, grouping images by their source page:
 ```json
-{{
-  "items": [
-    {{
-      "source_url": "https://example.com/productpage1",
-      "image_urls": [
-        "https://example.com/images/product1.jpg",
-        "https://example.com/images/product1_2.jpg"
-      ],
-      "product_description": "Product description text extracted from the page",
-      "brand": "Brand Name or empty string if not found",
-      "weight": {{
-        "unit_of_measure": "lb or oz or kg or g, or empty string if not found",
-        "value": 2.5
-      }},
-      "product_dimensions": {{
-        "length": 10.5,
-        "width": 5.0,
-        "height": 3.0
-      }}
-    }}
-  ]
-}}
+[
+  {{
+    "source_url": "https://example.com/productpage1",
+    "image_urls": [
+      "https://example.com/images/product1.jpg",
+      "https://example.com/images/product1_2.jpg"
+    ]
+  }},
+  {{
+    "source_url": "https://another-source.com/item",
+    "image_urls": [
+      "https://another-source.com/product_img.jpg"
+    ]
+  }}
+]
 ```
-Note: Use null for weight.value and product_dimensions values if not found on the page.
-If no valid product images and sources were found after all three search methods, return: {{ "items": [] }}
+If no valid product images and sources were found after all three search methods, return an empty array `[]`.
+
+# Examples
+
+**Example Output if valid images are found:**
+```json
+[
+  {{
+    "source_url": "https://shopA.com/product/123",
+    "image_urls": [
+      "https://shopA.com/files/prod123_main.jpg",
+      "https://shopA.com/files/prod123_side.jpg"
+    ]
+  }}
+]
+```
+
+**Example Output if no results are found:**
+```json
+[]
+```
 
 # Notes
 
@@ -257,7 +248,8 @@ If no valid product images and sources were found after all three search methods
 - Persist until all three search approaches are exhausted or valid images are found.
 
 **Reminder:**
-Always reason through the validation steps before concluding that a product image should be included in the output. Follow the instructions and output format exactly for consistent results."""
+Always reason through the validation steps before concluding that a product image should be included in the output. Follow the instructions and output format exactly for consistent results.
+This is the product: Barcode/UPC: {barcode}, Product SKU/part number: {sku}, Title: {title}"""
 
 
 # ============================================================================

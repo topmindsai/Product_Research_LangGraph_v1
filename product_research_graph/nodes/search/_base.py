@@ -31,6 +31,7 @@ from product_research_graph.utils.parsing import (
     extract_text_from_message,
     extract_json_from_response,
 )
+from product_research.schemas.models import AllFieldsSearchResponseSchema
 
 
 # Set up logging
@@ -236,6 +237,72 @@ async def _execute_openai_search(
         return extract_text_from_message(response)
     except Exception as e:
         logger.error(f"OpenAI search error: {e}")
+        return None
+
+
+async def execute_openai_search_structured(
+    prompt: str,
+    query: str,
+) -> AllFieldsSearchResponseSchema | None:
+    """
+    Execute search using OpenAI with native web_search + structured output.
+
+    Combines both OpenAI capabilities in a single LLM call:
+    - web_search_preview: Built-in web search tool (server-side execution)
+    - response_format: Native JSON schema enforcement
+
+    This provides:
+    - Guaranteed schema compliance via OpenAI's constrained decoding
+    - No manual JSON parsing required
+    - Type-safe Pydantic object returned directly
+
+    Args:
+        prompt: System prompt with search instructions
+        query: User query with product information
+
+    Returns:
+        AllFieldsSearchResponseSchema on success, None on failure
+    """
+    try:
+        # Create model with Responses API, web search tool, AND structured output
+        model = ChatOpenAI(
+            model="gpt-5.1",
+            temperature=0,
+            use_responses_api=True,
+            output_version="responses/v1",
+            model_kwargs={"reasoning": {"effort": "high"}},
+        ).bind_tools(
+            [{"type": "web_search_preview"}],
+            response_format=AllFieldsSearchResponseSchema,
+            strict=True,
+        )
+
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=query),
+        ]
+
+        logger.info("Executing OpenAI search with native web_search + structured output")
+        response = await model.ainvoke(messages)
+
+        # Per LangChain docs: with bind_tools(..., response_format=Schema),
+        # the parsed Pydantic object is in response.additional_kwargs["parsed"]
+        if hasattr(response, "additional_kwargs"):
+            parsed = response.additional_kwargs.get("parsed")
+            if isinstance(parsed, AllFieldsSearchResponseSchema):
+                logger.info(f"Structured search returned {len(parsed.items)} items")
+                return parsed
+
+        # Fallback: check if response itself is the schema (defensive)
+        if isinstance(response, AllFieldsSearchResponseSchema):
+            logger.info(f"Structured search returned {len(response.items)} items")
+            return response
+
+        logger.warning(f"OpenAI structured search returned unexpected response type: {type(response)}")
+        return None
+
+    except Exception as e:
+        logger.error(f"OpenAI structured search error: {e}")
         return None
 
 

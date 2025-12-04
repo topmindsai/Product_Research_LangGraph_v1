@@ -1,6 +1,6 @@
 """Pydantic models for agent inputs and outputs."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 # Validation/Image Extraction Agent Schemas
@@ -12,32 +12,53 @@ class ValidationImageExtractionAgentSchema__Product(BaseModel):
 
 class WeightSchema(BaseModel):
     """Product weight with unit of measure."""
-    unit_of_measure: str = ""  # e.g., "lb", "oz", "kg", "g"
+    model_config = ConfigDict(
+        extra='forbid',
+        # OpenAI strict mode requires all fields in 'required' array
+        json_schema_extra={
+            "required": ["unit_of_measure", "value"]
+        }
+    )
+
+    unit_of_measure: str = ""  # e.g., "lb", "oz", "kg", "g" - empty string if not found
     value: float | None = None  # Weight value, None if not found
 
 
 class ProductDimensionsSchema(BaseModel):
     """Product dimensions in inches."""
+    model_config = ConfigDict(
+        extra='forbid',
+        # OpenAI strict mode requires all fields in 'required' array
+        json_schema_extra={
+            "required": ["length", "width", "height"]
+        }
+    )
+
     length: float | None = None  # Length in inches, None if not found
     width: float | None = None   # Width in inches, None if not found
     height: float | None = None  # Height in inches, None if not found
 
 
 class ValidationImageExtractionAgentSchema__ValidatedPagesItem(BaseModel):
+    """A validated page with extracted product data."""
+    model_config = ConfigDict(extra='forbid')
+
     url: str
     validation_method: str
     image_urls: list[str]
-    reasoning: str = ""  # Explanation of why this page was validated
-    product_description: str = ""  # Product description extracted from the page
-    brand: str = ""  # Product brand name extracted from the page
-    weight: WeightSchema = WeightSchema()  # Product weight with unit of measure
-    product_dimensions: ProductDimensionsSchema = ProductDimensionsSchema()  # Dimensions in inches
+    reasoning: str  # Explanation of why this page was validated
+    product_description: str  # Product description extracted from the page
+    brand: str  # Product brand name extracted from the page
+    weight: WeightSchema  # Product weight with unit of measure
+    product_dimensions: ProductDimensionsSchema  # Dimensions in inches
 
 
 class ValidationImageExtractionAgentSchema__InvalidUrlItem(BaseModel):
     """An invalid URL with reasoning for why it was invalidated."""
+    model_config = ConfigDict(extra='forbid')
+
     url: str
-    reasoning: str = ""  # Explanation of why validation failed
+    reasoning: str  # Explanation of why validation failed
 
 
 class ValidationImageExtractionAgentSchema(BaseModel):
@@ -55,6 +76,7 @@ class ValidationResponseSchema(BaseModel):
     Used with LangGraph's create_react_agent response_format parameter
     to enable OpenAI's built-in JSON schema enforcement.
     """
+    model_config = ConfigDict(extra='forbid')
 
     total_checked: int
     total_validated_images: int
@@ -145,7 +167,32 @@ class SearchAgentTitleSkuGoogleSchema(BaseModel):
     results: list[SearchAgentTitleSkuGoogleSchema__ResultsItem]
 
 
-# Search Agent All Fields OpenAI Schema
+# Search Agent All Fields OpenAI Schema (with structured output support)
+class AllFieldsSearchItemSchema(BaseModel):
+    """Single item from all-fields OpenAI search with structured output.
+
+    Contains source URL and image URLs extracted via OpenAI's native
+    web_search_preview tool with structured output enforcement.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    source_url: str
+    image_urls: list[str]
+
+
+class AllFieldsSearchResponseSchema(BaseModel):
+    """Structured output schema for all-fields OpenAI search.
+
+    Used with ChatOpenAI.bind_tools() response_format parameter
+    to enable OpenAI's native JSON schema enforcement combined
+    with web_search_preview built-in tool in a single LLM call.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    items: list[AllFieldsSearchItemSchema]
+
+
+# Legacy schema (kept for backwards compatibility)
 class SearchAgentAllFieldsOpenaiSchema__ItemsItem(BaseModel):
     source_url: str
     image_urls: list[str]
