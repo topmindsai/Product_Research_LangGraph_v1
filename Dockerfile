@@ -14,5 +14,5 @@ COPY . .
 # Install the package itself
 RUN pip install --no-cache-dir -e .
 
-# Use shell form to expand $PORT variable
-CMD uvicorn product_research.api.routes:app --host 0.0.0.0 --port ${PORT:-8000}
+# Use main.py which reads PORT from environment via os.getenv()
+CMD ["python", "main.py"]
