@@ -141,6 +141,16 @@ curl -X POST http://localhost:8000/api/v1/product-images \
   }'
 ```
 
+```bash
+curl -X POST http://localhost:8000/api/v1/product-images \
+  -H "Content-Type: application/json" \
+  -d '{
+    "barcode": "0197644817122",
+    "sku": "BPMM0018",
+    "title": "Bait-Pop BPMM0018 Monkey Milk -"
+  }'
+```
+
 ### Batch Processing (API)
 
 ```bash
@@ -314,6 +324,57 @@ The workflow returns a `ValidationImageExtractionAgentSchema` with the following
 | POST | `/api/v1/product-images/batch` | Process multiple products from CSV/Excel |
 | GET | `/api/v1/batch-results/{filename}` | Download batch results file |
 | GET | `/health` | Health check |
+
+## Scripts
+
+### Fetching LangSmith Traces
+
+Use the `scripts/get_traces.py` script to fetch and save LangSmith traces by trace ID:
+
+```bash
+# Basic usage - fetch traces by trace ID (default: JSONL format)
+python scripts/get_traces.py <trace_id>
+
+# Example with a specific trace ID
+python scripts/get_traces.py 01936f2a-1234-5678-abcd-ef0123456789
+
+# Export as JSON (single array with all traces)
+python scripts/get_traces.py <trace_id> --format json
+
+# Export as CSV (flattened tabular format)
+python scripts/get_traces.py <trace_id> -f csv
+
+# Specify a different project name
+python scripts/get_traces.py <trace_id> --project "My_Project"
+
+# Save traces to a custom output directory
+python scripts/get_traces.py <trace_id> --output ./my_traces/
+
+# Adjust delay before fetching (useful for ensuring traces are fully synced)
+python scripts/get_traces.py <trace_id> --delay 2.0
+```
+
+**Arguments:**
+
+| Argument | Short | Description |
+|----------|-------|-------------|
+| `trace_id` | - | **Required.** The LangSmith trace ID to fetch |
+| `--format` | `-f` | Output format: `jsonl`, `json`, or `csv` (default: `jsonl`) |
+| `--project` | `-p` | LangSmith project name (defaults to `LANGCHAIN_PROJECT` env var) |
+| `--output` | `-o` | Output directory for saved traces (defaults to `./traces/`) |
+| `--delay` | `-d` | Seconds to wait before fetching (default: 1.0) |
+
+**Output Formats:**
+
+| Format | Description |
+|--------|-------------|
+| `jsonl` | One JSON object per line (default) |
+| `json` | Single JSON array with all traces, indented |
+| `csv` | Flattened CSV with nested fields as JSON strings |
+
+**Prerequisites:**
+- `LANGCHAIN_API_KEY` must be set in your environment
+- `LANGCHAIN_PROJECT` should be set (or use `--project` flag)
 
 ## License
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI script to fetch LangSmith traces for a given run ID."""
+"""CLI script to fetch LangSmith traces for a given trace ID."""
 
 import argparse
 import sys
@@ -13,11 +13,11 @@ from product_research_graph.tracing import fetch_and_save_traces
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Fetch LangSmith traces for a given run ID"
+        description="Fetch LangSmith traces for a given trace ID"
     )
     parser.add_argument(
-        "run_id",
-        help="The LangSmith run/trace ID to fetch traces for"
+        "trace_id",
+        help="The LangSmith trace ID to fetch traces for"
     )
     parser.add_argument(
         "--project", "-p",
@@ -34,15 +34,22 @@ def main():
         default=1.0,
         help="Seconds to wait before fetching (default: 1.0)"
     )
+    parser.add_argument(
+        "--format", "-f",
+        choices=["jsonl", "json", "csv"],
+        default="jsonl",
+        help="Output format: jsonl, json, or csv (default: jsonl)"
+    )
 
     args = parser.parse_args()
 
     try:
         count = fetch_and_save_traces(
-            run_id=args.run_id,
+            trace_id=args.trace_id,
             project_name=args.project,
             output_dir=args.output,
-            delay=args.delay
+            delay=args.delay,
+            output_format=args.format
         )
 
         if count > 0:

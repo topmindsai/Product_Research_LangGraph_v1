@@ -1,6 +1,6 @@
 """Pydantic models for agent inputs and outputs."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 # Validation/Image Extraction Agent Schemas
@@ -208,6 +208,14 @@ class ProductInput(BaseModel):
     barcode: str = ""
     sku: str = ""
     title: str = ""
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_field_names(cls, data):
+        """Normalize field names to lowercase for case-insensitive matching."""
+        if isinstance(data, dict):
+            return {k.lower(): v for k, v in data.items()}
+        return data
 
 
 class BatchResult(BaseModel):
