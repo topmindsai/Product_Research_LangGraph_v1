@@ -83,26 +83,65 @@ def normalize_barcode(barcode: str | int) -> str:
     return cleaned
 
 
+def extract_from_product_input(state: ProductResearchState) -> tuple[str, str, str]:
+    """
+    Extract barcode, sku, title from product_input if present.
+
+    LangSmith experiments may pass input as {"product_input": {...}}
+    when the dataset has a column named 'product_input'. This function
+    checks for this wrapper and extracts the nested values.
+
+    Args:
+        state: Current workflow state
+
+    Returns:
+        Tuple of (barcode, sku, title) extracted from product_input or state
+    """
+    barcode = state.get("barcode", "")
+    sku = state.get("sku", "")
+    title = state.get("title", "")
+
+    # Check if we have a product_input wrapper (from LangSmith datasets)
+    product_input = state.get("product_input")
+    if product_input and isinstance(product_input, dict):
+        # Extract values from product_input if not already set in state
+        # Use case-insensitive key lookup
+        normalized_input = {k.lower(): v for k, v in product_input.items()}
+
+        if not barcode:
+            barcode = normalized_input.get("barcode", "")
+        if not sku:
+            sku = normalized_input.get("sku", "")
+        if not title:
+            title = normalized_input.get("title", "")
+
+        logger.info(
+            f"Extracted from product_input: barcode={barcode!r}, sku={sku!r}, title={title!r}"
+        )
+
+    return barcode, sku, title
+
+
 @traceable(name="initialize_node")
 def initialize_node(state: ProductResearchState) -> dict:
     """
     Initialize the workflow state based on input product data.
 
     This node:
-    1. Normalizes barcode to standard 12-digit UPC format
-    2. Determines which search configurations to use based on barcode availability
-    3. Sets the search type label for output
-    4. Initializes all state counters to zero
+    1. Extracts product data from product_input wrapper if present (LangSmith datasets)
+    2. Normalizes barcode to standard 12-digit UPC format
+    3. Determines which search configurations to use based on barcode availability
+    4. Sets the search type label for output
+    5. Initializes all state counters to zero
 
     Args:
-        state: Current workflow state with barcode, sku, title
+        state: Current workflow state with barcode, sku, title (or product_input wrapper)
 
     Returns:
         Dict with updated state fields (including normalized barcode)
     """
-    barcode = state.get("barcode", "")
-    sku = state.get("sku", "")
-    title = state.get("title", "")
+    # Extract values, handling product_input wrapper from LangSmith datasets
+    barcode, sku, title = extract_from_product_input(state)
 
     # Normalize barcode to standard 12-digit UPC format
     normalized_barcode = normalize_barcode(barcode) if barcode else ""
@@ -117,8 +156,11 @@ def initialize_node(state: ProductResearchState) -> dict:
     search_type_label = "barcode" if has_barcode else "sku"
 
     return {
-        # Return normalized barcode for use in searches
+        # Return product data (extracted from product_input if needed)
         "barcode": normalized_barcode,
+        "sku": sku,
+        "title": title,
+        # Search configuration
         "search_configs": search_configs,
         "search_index": 0,
         "search_type_label": search_type_label,

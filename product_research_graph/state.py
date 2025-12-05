@@ -1,7 +1,10 @@
 """State schema definition for the Product Research workflow."""
 
-from typing import TypedDict, Annotated, Any, NotRequired
+from typing import TypedDict, Annotated, Any, Iterator
 from operator import add
+from collections.abc import Mapping
+
+from pydantic import BaseModel, model_validator
 
 
 def merge_lists(left: list, right: list) -> list:
@@ -28,11 +31,60 @@ def merge_invalid_urls(left: list[dict], right: list[dict]) -> list[dict]:
     return list(seen_urls.values())
 
 
-class ProductResearchInputState(TypedDict):
-    """Input schema - only the fields required to start the workflow."""
-    barcode: NotRequired[str]  # Optional - can be empty
-    sku: str
-    title: str
+class ProductResearchInputState(BaseModel, Mapping):
+    """Input schema with Mapping support for LangGraph compatibility.
+
+    Inherits from Mapping so LangGraph can recognize it as a dict-like
+    container and properly extract values during state initialization.
+
+    Supports two input formats:
+    1. Direct: {"barcode": "...", "sku": "...", "title": "..."}
+    2. Wrapped: {"product_input": {"barcode": "...", "sku": "...", "title": "..."}}
+
+    The wrapped format is used by LangSmith experiments when the dataset
+    has a column named 'product_input' containing the product data.
+    """
+    barcode: str = ""  # Optional - can be empty
+    sku: str = ""
+    title: str = ""
+    # Support for wrapped input from LangSmith datasets
+    product_input: dict[str, Any] | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_and_unwrap(cls, data):
+        """Normalize field names to lowercase and unwrap product_input if present."""
+        if not isinstance(data, dict):
+            return data
+
+        # Normalize top-level field names to lowercase
+        normalized = {k.lower(): v for k, v in data.items()}
+
+        # If wrapped in product_input, extract nested values
+        product_input = normalized.get('product_input')
+        if isinstance(product_input, dict):
+            # Normalize nested keys and extract values not already set
+            nested = {k.lower(): v for k, v in product_input.items()}
+            for key in ['barcode', 'sku', 'title']:
+                if not normalized.get(key) and nested.get(key):
+                    normalized[key] = nested[key]
+
+        return normalized
+
+    # Mapping interface (required for LangGraph to extract values)
+    def __getitem__(self, key: str):
+        """Enable state['field'] access."""
+        if key not in self.__class__.model_fields:
+            raise KeyError(key)
+        return getattr(self, key)
+
+    def __iter__(self) -> Iterator[str]:
+        """Enable iteration over field names."""
+        return iter(self.__class__.model_fields.keys())
+
+    def __len__(self) -> int:
+        """Return number of fields."""
+        return len(self.__class__.model_fields)
 
 
 class ProductResearchOutputState(TypedDict):
@@ -90,6 +142,8 @@ class ProductResearchState(TypedDict):
     barcode: str
     sku: str
     title: str
+    # Support for wrapped input from LangSmith datasets
+    product_input: dict[str, Any] | None
 
     # ===== Search Configuration =====
     search_configs: list[SearchConfigDict]  # List of search configurations to try
@@ -127,6 +181,7 @@ def create_initial_state(barcode: str, sku: str, title: str) -> ProductResearchS
         barcode=barcode,
         sku=sku,
         title=title,
+        product_input=None,
         # Search configuration (populated by initialize node)
         search_configs=[],
         search_index=0,
