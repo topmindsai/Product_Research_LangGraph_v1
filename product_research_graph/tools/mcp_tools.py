@@ -61,6 +61,7 @@ ZYTE_MCP_URL = LangGraphConfig.ZYTE_MCP_URL
 GOOGLE_SEARCH_TOOL_NAME = "Google_Search"
 YAHOO_SEARCH_TOOL_NAME = "Yahoo_Search"
 ZYTE_SCRAPE_TOOL_NAME = "scrape_product_optimized"
+ZYTE_PRODUCT_DATA_TOOL_NAME = "get_product_data"
 
 
 async def get_serp_tools() -> list[BaseTool]:
@@ -228,12 +229,39 @@ async def get_zyte_scrape_tool() -> BaseTool | None:
     return None
 
 
+async def get_zyte_product_data_tool() -> BaseTool | None:
+    """
+    Get the Zyte get_product_data tool from the Zyte MCP server.
+
+    This tool is optimized for Amazon product pages and provides
+    structured product data extraction.
+
+    Returns:
+        The get_product_data tool or None if not found.
+    """
+    tools = await get_zyte_tools()
+
+    for tool in tools:
+        if tool.name == ZYTE_PRODUCT_DATA_TOOL_NAME:
+            logger.debug(f"Found Zyte product data tool: {tool.name}")
+            return tool
+
+    # Fallback: try partial match for product_data
+    for tool in tools:
+        if "product_data" in tool.name.lower():
+            logger.warning(f"Using fallback match for Zyte product data: {tool.name}")
+            return tool
+
+    logger.warning(f"Zyte product data tool ({ZYTE_PRODUCT_DATA_TOOL_NAME}) not found. Available tools: {[t.name for t in tools]}")
+    return None
+
+
 def get_tool_name_for_type(tool_type: str) -> str:
     """
     Get the exact MCP tool name for a given tool type.
 
     Args:
-        tool_type: One of "google_mcp", "yahoo_mcp", "zyte_mcp"
+        tool_type: One of "google_mcp", "yahoo_mcp", "zyte_mcp", "zyte_product_data"
 
     Returns:
         The exact tool name as defined on the MCP server.
@@ -242,6 +270,7 @@ def get_tool_name_for_type(tool_type: str) -> str:
         "google_mcp": GOOGLE_SEARCH_TOOL_NAME,
         "yahoo_mcp": YAHOO_SEARCH_TOOL_NAME,
         "zyte_mcp": ZYTE_SCRAPE_TOOL_NAME,
+        "zyte_product_data": ZYTE_PRODUCT_DATA_TOOL_NAME,
     }
     return mapping.get(tool_type, tool_type)
 
