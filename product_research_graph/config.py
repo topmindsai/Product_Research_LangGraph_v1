@@ -9,6 +9,29 @@ from product_research_graph.prompts.templates import SearchPromptKey
 ToolType = Literal["google_mcp", "yahoo_mcp", "openai_web_search"]
 
 
+# Minimum SKU length required for SKU-only searches
+MIN_SKU_LENGTH_FOR_SEARCH = 5
+
+
+def should_include_sku_searches(sku: str | None) -> bool:
+    """
+    Check if SKU is long enough for SKU-based searches.
+
+    SKU-only searches (sku_google, sku_yahoo, sku_openai) require
+    a minimum length to be effective. Short SKUs produce too many
+    false positives in search results.
+
+    Args:
+        sku: Product SKU/part number
+
+    Returns:
+        True if SKU length >= MIN_SKU_LENGTH_FOR_SEARCH after stripping whitespace
+    """
+    if not sku:
+        return False
+    return len(sku.strip()) >= MIN_SKU_LENGTH_FOR_SEARCH
+
+
 @dataclass
 class SearchConfig:
     """Configuration for a single search attempt."""
@@ -111,32 +134,45 @@ ALL_SEARCH_CONFIGS = BARCODE_SEARCH_CONFIGS + SKU_SEARCH_CONFIGS + TITLE_SKU_SEA
 SKU_ONLY_SEARCH_CONFIGS = SKU_SEARCH_CONFIGS + TITLE_SKU_SEARCH_CONFIGS
 
 
-def get_search_configs(has_barcode: bool) -> list[SearchConfig]:
+def get_search_configs(has_barcode: bool, sku: str | None = None) -> list[SearchConfig]:
     """
     Get the appropriate search configurations based on available data.
 
     Args:
         has_barcode: Whether the product has a barcode
+        sku: Product SKU (used to determine if SKU-only searches should be included)
 
     Returns:
         List of SearchConfig objects to try in order
     """
+    include_sku_searches = should_include_sku_searches(sku)
+
     if has_barcode:
-        return ALL_SEARCH_CONFIGS
-    return SKU_ONLY_SEARCH_CONFIGS
+        if include_sku_searches:
+            return ALL_SEARCH_CONFIGS  # barcode + sku + title_sku
+        else:
+            # Skip SKU_SEARCH_CONFIGS, keep barcode and title_sku
+            return BARCODE_SEARCH_CONFIGS + TITLE_SKU_SEARCH_CONFIGS
+    else:
+        if include_sku_searches:
+            return SKU_ONLY_SEARCH_CONFIGS  # sku + title_sku
+        else:
+            # Only title_sku searches when SKU too short
+            return TITLE_SKU_SEARCH_CONFIGS
 
 
-def get_search_configs_as_dicts(has_barcode: bool) -> list[dict]:
+def get_search_configs_as_dicts(has_barcode: bool, sku: str | None = None) -> list[dict]:
     """
     Get search configurations as dictionaries for state storage.
 
     Args:
         has_barcode: Whether the product has a barcode
+        sku: Product SKU (used to determine if SKU-only searches should be included)
 
     Returns:
         List of config dictionaries
     """
-    configs = get_search_configs(has_barcode)
+    configs = get_search_configs(has_barcode, sku)
     return [config.to_dict() for config in configs]
 
 
