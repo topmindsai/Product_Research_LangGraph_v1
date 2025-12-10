@@ -150,7 +150,8 @@ def initialize_node(state: ProductResearchState) -> dict:
     has_barcode = bool(normalized_barcode and normalized_barcode.strip())
 
     # Get appropriate search configurations
-    search_configs = get_search_configs_as_dicts(has_barcode)
+    # Pass SKU to filter out SKU-only searches when SKU is too short (< 5 chars)
+    search_configs = get_search_configs_as_dicts(has_barcode, sku)
 
     # Determine search type label for output
     search_type_label = "barcode" if has_barcode else "sku"

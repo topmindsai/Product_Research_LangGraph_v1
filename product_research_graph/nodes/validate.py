@@ -3,16 +3,22 @@
 This module uses create_react_agent from langgraph.prebuilt for proper
 tool execution with the Zyte MCP tool. Uses LangGraph's response_format
 parameter for structured output with OpenAI's built-in JSON schema enforcement.
+
+Supports domain-based tool routing:
+- Amazon URLs -> get_product_data tool
+- Other URLs -> scrape_product_optimized tool
 """
 
 import asyncio
 import json
 import logging
+from typing import Awaitable, Callable
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
 from langsmith import traceable
 from langgraph.prebuilt import create_react_agent
 
@@ -25,10 +31,12 @@ from product_research_graph.state import (
 )
 from product_research_graph.tools.mcp_tools import (
     get_zyte_scrape_tool,
+    get_zyte_product_data_tool,
     clear_mcp_caches,
     _is_mcp_connection_error,
 )
 from product_research_graph.prompts.templates import get_validation_prompt
+from product_research_graph.utils.url_helpers import partition_urls_by_domain
 from product_research.config.settings import LangGraphConfig
 from product_research.schemas.models import (
     ValidationResponseSchema,
@@ -88,6 +96,7 @@ async def _execute_validation_with_react_agent(
     urls_str: str,
     max_retries: int = 2,
     timeout: float = 120.0,
+    tool_getter: Callable[[], Awaitable[BaseTool | None]] | None = None,
 ) -> ValidationResponseSchema | None:
     """
     Execute validation using a ReAct agent with structured output.
@@ -101,6 +110,15 @@ async def _execute_validation_with_react_agent(
 
     Includes retry logic for MCP connection errors (ClosedResourceError, etc.)
     which can occur when SSE streams are unexpectedly closed.
+
+    Args:
+        tool: The MCP tool to use for validation
+        prompt: The validation prompt
+        urls_str: JSON string of URLs to validate
+        max_retries: Maximum number of retries for MCP connection errors
+        timeout: Timeout in seconds for the agent invocation
+        tool_getter: Optional function to get a fresh tool on retry. If not provided,
+                     falls back to get_zyte_scrape_tool() for backward compatibility.
 
     Returns:
         ValidationResponseSchema on success, None on failure.
@@ -163,14 +181,17 @@ async def _execute_validation_with_react_agent(
                 )
                 logger.info("Clearing MCP cache and retrying with fresh connection...")
                 await clear_mcp_caches()
-                # Get fresh tool after clearing cache
-                fresh_tool = await get_zyte_scrape_tool()
+                # Get fresh tool after clearing cache using provided getter or default
+                if tool_getter:
+                    fresh_tool = await tool_getter()
+                else:
+                    fresh_tool = await get_zyte_scrape_tool()
                 if fresh_tool:
                     current_tool = fresh_tool
                     await asyncio.sleep(0.5)  # Brief delay before retry
                     continue
                 else:
-                    logger.error("Failed to get fresh Zyte tool after cache clear")
+                    logger.error("Failed to get fresh tool after cache clear")
                     return None
             else:
                 # Log but DON'T re-raise - return None for graceful degradation
@@ -241,12 +262,77 @@ def _convert_result_to_dict(result: ValidationResponseSchema) -> dict:
     }
 
 
+async def _process_url_group_with_tool(
+    urls: list[str],
+    tool: BaseTool | None,
+    tool_getter: Callable[[], Awaitable[BaseTool | None]],
+    tool_name: str,
+    prompt: str,
+    timeout: float,
+) -> dict:
+    """
+    Process a group of URLs with a specific MCP tool.
+
+    This helper function handles validation of a URL group using either
+    the get_product_data tool (for Amazon URLs) or the scrape_product_optimized
+    tool (for other URLs).
+
+    Args:
+        urls: List of URLs to validate
+        tool: The MCP tool to use (or None if not available)
+        tool_getter: Function to get fresh tool on retry
+        tool_name: Human-readable name of the tool for logging
+        prompt: The validation prompt
+        timeout: Timeout in seconds
+
+    Returns:
+        Dict with validated_pages, invalid_urls, total_validated_images, total_checked
+    """
+    urls_str = json.dumps(urls)
+
+    if tool is None:
+        logger.error(f"{tool_name} not available, marking {len(urls)} URLs as failed")
+        return _mark_urls_invalid(urls, f"{tool_name} not available")
+
+    logger.info(f"Processing {len(urls)} URLs with {tool_name}: {tool.name}")
+
+    try:
+        structured_result = await _execute_validation_with_react_agent(
+            tool=tool,
+            prompt=prompt,
+            urls_str=urls_str,
+            timeout=timeout,
+            tool_getter=tool_getter,
+        )
+
+        if structured_result is not None:
+            logger.info(
+                f"{tool_name} validation complete: {len(structured_result.validated_pages)} valid pages, "
+                f"{structured_result.total_validated_images} images"
+            )
+            return _convert_result_to_dict(structured_result)
+
+        logger.warning(f"{tool_name} validation returned no structured response")
+        return _mark_urls_invalid(urls, f"{tool_name} validation failed to return structured response")
+
+    except asyncio.TimeoutError:
+        logger.error(f"{tool_name} validation timed out after {timeout} seconds")
+        return _mark_urls_invalid(urls, f"{tool_name} validation timed out after {timeout}s")
+    except Exception as e:
+        logger.error(f"{tool_name} validation error: {e}")
+        return _mark_urls_invalid(urls, f"{tool_name} validation error: {str(e)}")
+
+
 async def _process_url_batch(
     urls: list[str],
     state: ProductResearchState,
 ) -> dict:
     """
-    Process a batch of URLs with dynamic timeout.
+    Process a batch of URLs with domain-based tool routing.
+
+    Routes URLs to appropriate tools based on domain:
+    - Amazon URLs -> get_product_data tool
+    - Other URLs -> scrape_product_optimized tool
 
     Args:
         urls: List of URLs to validate in this batch
@@ -268,63 +354,83 @@ async def _process_url_batch(
     title = state.get("title", "")
     search_type_label = state.get("search_type_label", "barcode")
 
-    # Format URLs for prompt
-    urls_str = json.dumps(urls)
+    # Partition URLs by domain (Amazon vs other)
+    amazon_urls, other_urls = partition_urls_by_domain(urls)
 
-    # Get the validation prompt
-    prompt = get_validation_prompt(
-        barcode=barcode,
-        sku=sku,
-        title=title,
-        urls=urls_str,
-        search_type=search_type_label,
-    )
+    logger.info(f"URL partition: {len(amazon_urls)} Amazon URLs, {len(other_urls)} other URLs")
+
+    # Initialize result accumulators
+    all_validated_pages: list[ValidatedPageDict] = []
+    all_invalid_urls: list[InvalidUrlDict] = []
+    total_images = 0
+    total_checked = 0
 
     try:
-        # Get the Zyte scrape tool with proper session management
-        scrape_tool = await get_zyte_scrape_tool()
+        # Process Amazon URLs with get_product_data tool
+        if amazon_urls:
+            amazon_tool = await get_zyte_product_data_tool()
 
-        if scrape_tool:
-            logger.info(f"Got Zyte scrape tool: {scrape_tool.name}")
-            # Use ReAct agent with structured output
-            structured_result = await _execute_validation_with_react_agent(
+            # Create prompt for Amazon URLs
+            amazon_prompt = get_validation_prompt(
+                barcode=barcode,
+                sku=sku,
+                title=title,
+                urls=json.dumps(amazon_urls),
+                search_type=search_type_label,
+            )
+
+            amazon_result = await _process_url_group_with_tool(
+                urls=amazon_urls,
+                tool=amazon_tool,
+                tool_getter=get_zyte_product_data_tool,
+                tool_name="Amazon product data tool",
+                prompt=amazon_prompt,
+                timeout=timeout,
+            )
+
+            all_validated_pages.extend(amazon_result.get("validated_pages", []))
+            all_invalid_urls.extend(amazon_result.get("invalid_urls", []))
+            total_images += amazon_result.get("total_validated_images", 0)
+            total_checked += amazon_result.get("total_checked", 0)
+
+        # Process non-Amazon URLs with scrape_product_optimized tool
+        if other_urls:
+            scrape_tool = await get_zyte_scrape_tool()
+
+            # Create prompt for other URLs
+            other_prompt = get_validation_prompt(
+                barcode=barcode,
+                sku=sku,
+                title=title,
+                urls=json.dumps(other_urls),
+                search_type=search_type_label,
+            )
+
+            other_result = await _process_url_group_with_tool(
+                urls=other_urls,
                 tool=scrape_tool,
-                prompt=prompt,
-                urls_str=urls_str,
-                timeout=timeout,
-            )
-        else:
-            # No scrape tool available, use model with structured output directly
-            logger.warning("Zyte scrape tool not available, using model-only validation")
-            model = _create_validation_model()
-
-            # Use with_structured_output for consistency
-            structured_model = model.with_structured_output(ValidationResponseSchema)
-
-            messages = [
-                SystemMessage(content=prompt),
-                HumanMessage(
-                    content=f"Please validate these URLs: {urls_str}\n\n"
-                    "Note: The scraping tool is not available. Please analyze the URLs "
-                    "based on the URL patterns and provide your best assessment."
-                ),
-            ]
-            structured_result = await asyncio.wait_for(
-                structured_model.ainvoke(messages),
+                tool_getter=get_zyte_scrape_tool,
+                tool_name="Zyte scrape tool",
+                prompt=other_prompt,
                 timeout=timeout,
             )
 
-        # Process structured result
-        if structured_result is not None:
-            logger.info(
-                f"Batch validation complete: {len(structured_result.validated_pages)} valid pages, "
-                f"{structured_result.total_validated_images} images"
-            )
-            return _convert_result_to_dict(structured_result)
+            all_validated_pages.extend(other_result.get("validated_pages", []))
+            all_invalid_urls.extend(other_result.get("invalid_urls", []))
+            total_images += other_result.get("total_validated_images", 0)
+            total_checked += other_result.get("total_checked", 0)
 
-        # Structured output failed
-        logger.warning("Failed to get structured validation results for batch")
-        return _mark_urls_invalid(urls, "Validation failed to return structured response")
+        logger.info(
+            f"Batch validation complete: {len(all_validated_pages)} valid pages, "
+            f"{total_images} images"
+        )
+
+        return {
+            "validated_pages": all_validated_pages,
+            "invalid_urls": all_invalid_urls,
+            "total_validated_images": total_images,
+            "total_checked": total_checked,
+        }
 
     except asyncio.TimeoutError:
         logger.error(f"Batch validation timed out after {timeout} seconds")
