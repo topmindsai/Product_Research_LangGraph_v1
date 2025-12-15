@@ -41,7 +41,23 @@ class ProductDimensionsSchema(BaseModel):
 
 class ValidationImageExtractionAgentSchema__ValidatedPagesItem(BaseModel):
     """A validated page with extracted product data."""
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(
+        extra='forbid',
+        # OpenAI strict mode requires all fields in 'required' array
+        json_schema_extra={
+            "required": [
+                "url",
+                "validation_method",
+                "image_urls",
+                "reasoning",
+                "product_description",
+                "brand",
+                "weight",
+                "product_dimensions",
+                "is_shopify"
+            ]
+        }
+    )
 
     url: str
     validation_method: str
@@ -51,6 +67,7 @@ class ValidationImageExtractionAgentSchema__ValidatedPagesItem(BaseModel):
     brand: str  # Product brand name extracted from the page
     weight: WeightSchema  # Product weight with unit of measure
     product_dimensions: ProductDimensionsSchema  # Dimensions in inches
+    is_shopify: bool | None = None  # Whether the URL is a Shopify store
 
 
 class ValidationImageExtractionAgentSchema__InvalidUrlItem(BaseModel):

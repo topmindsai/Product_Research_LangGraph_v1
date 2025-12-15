@@ -12,7 +12,9 @@ This application uses LangGraph to orchestrate a multi-node workflow that search
 - **Multiple Search Sources**: Google, Yahoo, and OpenAI web search via MCP tools
 - **8-Step Search Strategy**: Sequential fallback from barcode → SKU → title+SKU combinations
 - **Strict Image Validation**: Ensures images match exact product variants (not similar products)
-- **Rich Data Extraction**: Extracts product descriptions, brand, weight, and dimensions from validated pages
+- **Rich Data Extraction**: Extracts product descriptions, brand, weight, dimensions, and Shopify store detection from validated pages
+- **Smart SKU Filtering**: SKU-only searches are skipped when SKU is less than 5 characters (reduces false positives)
+- **Domain-Based Tool Routing**: Uses specialized tools for Amazon URLs (24 supported domains) vs generic scraping for other sites
 - **Batch Processing**: Process CSV/Excel files with concurrent execution
 - **Dual-Mode Execution**: Run as REST API server or CLI tool
 - **Structured Output**: Pydantic-validated JSON responses
@@ -264,7 +266,13 @@ START
 7. Title+SKU + Google Search
 8. All Fields + OpenAI Web Search (routes directly to finalize, bypassing filter/validate)
 
+**Note:** SKU-only searches (4-6) are automatically skipped when the SKU is less than 5 characters to reduce false positives.
+
 The workflow stops on the first successful image extraction (≥1 validated image) or after exhausting all configurations.
+
+**Validation Tool Routing:**
+- Amazon URLs (amazon.com, amazon.ca, amazon.co.uk, etc. - 24 domains): Uses `get_product_data` MCP tool
+- All other URLs: Uses `scrape_product_optimized` MCP tool
 
 **Extracted Data from Validated Pages:**
 - Image URLs (Shopify-ready)
@@ -273,6 +281,7 @@ The workflow stops on the first successful image extraction (≥1 validated imag
 - Brand name
 - Weight (with unit of measure)
 - Product dimensions (length, width, height in inches)
+- Shopify store detection (is_shopify flag)
 
 ## Output Schema
 
@@ -304,7 +313,8 @@ The workflow returns a `ValidationImageExtractionAgentSchema` with the following
                 "length": 4.5,
                 "width": 1.0,
                 "height": 0.5
-            }
+            },
+            "is_shopify": true
         }
     ],
     "invalid_urls": [
