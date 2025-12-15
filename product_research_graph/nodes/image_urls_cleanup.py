@@ -161,6 +161,7 @@ async def _cleanup_page_images(
             "product_dimensions",
             ProductDimensionsDict(length=None, width=None, height=None),
         ),
+        is_shopify=page.get("is_shopify"),
     )
 
     return cleaned_page, len(valid_urls)

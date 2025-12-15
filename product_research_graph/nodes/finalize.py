@@ -77,6 +77,7 @@ def finalize_node(state: ProductResearchState) -> dict:
             "brand": page.get("brand", ""),
             "weight": weight_formatted,
             "product_dimensions": dimensions_formatted,
+            "is_shopify": page.get("is_shopify"),
         })
 
     # Deduplicate invalid_urls by URL while preserving structure

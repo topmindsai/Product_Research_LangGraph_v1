@@ -15,7 +15,7 @@ import logging
 from typing import Awaitable, Callable
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -90,6 +90,42 @@ def _create_validation_model():
         )
 
 
+def _extract_shopify_status_from_messages(
+    messages: list,
+) -> dict[str, bool | None]:
+    """
+    Extract is_shopify status from raw Zyte MCP ToolMessage responses.
+
+    The Zyte MCP tool returns platformDetection.shopify.isShopify in its response.
+    This function parses the raw ToolMessage content to extract this value
+    and maps it to the corresponding URL.
+
+    Args:
+        messages: List of messages from agent.ainvoke() result
+
+    Returns:
+        Dict mapping URL -> is_shopify boolean (or None if not found)
+    """
+    url_to_shopify: dict[str, bool | None] = {}
+
+    for msg in messages:
+        if isinstance(msg, ToolMessage) and msg.name in [
+            "scrape_product_optimized",
+            "get_product_data",
+        ]:
+            try:
+                response_data = json.loads(msg.content)
+                url = response_data.get("url", "")
+                shopify_info = response_data.get("platformDetection", {}).get("shopify", {})
+                is_shopify = shopify_info.get("isShopify")
+                if url:
+                    url_to_shopify[url] = is_shopify
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                continue
+
+    return url_to_shopify
+
+
 async def _execute_validation_with_react_agent(
     tool,
     prompt: str,
@@ -97,7 +133,7 @@ async def _execute_validation_with_react_agent(
     max_retries: int = 2,
     timeout: float = 120.0,
     tool_getter: Callable[[], Awaitable[BaseTool | None]] | None = None,
-) -> ValidationResponseSchema | None:
+) -> tuple[ValidationResponseSchema | None, dict[str, bool | None]]:
     """
     Execute validation using a ReAct agent with structured output.
 
@@ -111,6 +147,9 @@ async def _execute_validation_with_react_agent(
     Includes retry logic for MCP connection errors (ClosedResourceError, etc.)
     which can occur when SSE streams are unexpectedly closed.
 
+    Also extracts platformDetection.shopify.isShopify from raw ToolMessage
+    responses for programmatic Shopify detection.
+
     Args:
         tool: The MCP tool to use for validation
         prompt: The validation prompt
@@ -121,11 +160,12 @@ async def _execute_validation_with_react_agent(
                      falls back to get_zyte_scrape_tool() for backward compatibility.
 
     Returns:
-        ValidationResponseSchema on success, None on failure.
+        Tuple of (ValidationResponseSchema, shopify_mapping) on success,
+        (None, {}) on failure.
     """
     if tool is None:
         logger.error("Cannot execute ReAct agent without a tool")
-        return None
+        return None, {}
 
     current_tool = tool
 
@@ -159,20 +199,24 @@ async def _execute_validation_with_react_agent(
             # Access the structured response directly (guaranteed to match schema)
             structured_response = result.get("structured_response")
 
+            # Extract shopify status from raw ToolMessage responses
+            raw_messages = result.get("messages", [])
+            shopify_mapping = _extract_shopify_status_from_messages(raw_messages)
+
             if structured_response is not None:
                 logger.info(
                     f"ReAct agent returned structured response with "
                     f"{len(structured_response.validated_pages)} valid pages, "
                     f"{structured_response.total_validated_images} images"
                 )
-                return structured_response
+                return structured_response, shopify_mapping
 
             logger.warning("ReAct agent returned no structured response")
-            return None
+            return None, shopify_mapping
 
         except asyncio.TimeoutError:
             logger.error(f"ReAct agent validation timed out after {timeout} seconds")
-            return None
+            return None, {}
         except Exception as e:
             # Check if this is an MCP connection error that should be retried
             if _is_mcp_connection_error(e) and attempt < max_retries:
@@ -192,19 +236,25 @@ async def _execute_validation_with_react_agent(
                     continue
                 else:
                     logger.error("Failed to get fresh tool after cache clear")
-                    return None
+                    return None, {}
             else:
                 # Log but DON'T re-raise - return None for graceful degradation
                 logger.error(f"ReAct agent validation failed: {e}")
-                return None
+                return None, {}
 
-    return None
+    return None, {}
 
 
 def _convert_to_validated_page_dict(
     page: "ValidationImageExtractionAgentSchema__ValidatedPagesItem",
+    is_shopify: bool | None = None,
 ) -> ValidatedPageDict:
-    """Convert Pydantic ValidatedPagesItem to TypedDict for state compatibility."""
+    """Convert Pydantic ValidatedPagesItem to TypedDict for state compatibility.
+
+    Args:
+        page: The Pydantic model to convert
+        is_shopify: Whether the URL is a Shopify store (from platformDetection)
+    """
     return ValidatedPageDict(
         url=page.url,
         validation_method=page.validation_method,
@@ -221,6 +271,7 @@ def _convert_to_validated_page_dict(
             width=page.product_dimensions.width,
             height=page.product_dimensions.height,
         ),
+        is_shopify=is_shopify,
     )
 
 
@@ -244,10 +295,22 @@ def _mark_urls_invalid(urls: list[str], reasoning: str) -> dict:
     }
 
 
-def _convert_result_to_dict(result: ValidationResponseSchema) -> dict:
-    """Convert Pydantic ValidationResponseSchema to dict for state update."""
+def _convert_result_to_dict(
+    result: ValidationResponseSchema,
+    shopify_mapping: dict[str, bool | None] | None = None,
+) -> dict:
+    """Convert Pydantic ValidationResponseSchema to dict for state update.
+
+    Args:
+        result: The validation response schema to convert
+        shopify_mapping: Optional mapping of URL -> is_shopify from platformDetection
+    """
+    shopify_mapping = shopify_mapping or {}
     validated_pages = [
-        _convert_to_validated_page_dict(page)
+        _convert_to_validated_page_dict(
+            page,
+            is_shopify=shopify_mapping.get(page.url),
+        )
         for page in result.validated_pages
     ]
     invalid_urls = [
@@ -297,7 +360,7 @@ async def _process_url_group_with_tool(
     logger.info(f"Processing {len(urls)} URLs with {tool_name}: {tool.name}")
 
     try:
-        structured_result = await _execute_validation_with_react_agent(
+        structured_result, shopify_mapping = await _execute_validation_with_react_agent(
             tool=tool,
             prompt=prompt,
             urls_str=urls_str,
@@ -310,7 +373,7 @@ async def _process_url_group_with_tool(
                 f"{tool_name} validation complete: {len(structured_result.validated_pages)} valid pages, "
                 f"{structured_result.total_validated_images} images"
             )
-            return _convert_result_to_dict(structured_result)
+            return _convert_result_to_dict(structured_result, shopify_mapping)
 
         logger.warning(f"{tool_name} validation returned no structured response")
         return _mark_urls_invalid(urls, f"{tool_name} validation failed to return structured response")

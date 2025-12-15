@@ -123,6 +123,7 @@ class ValidatedPageDict(TypedDict):
     brand: str  # Product brand name extracted from the page
     weight: WeightDict  # Product weight with unit of measure
     product_dimensions: ProductDimensionsDict  # Product dimensions in inches
+    is_shopify: bool | None  # Whether the URL is a Shopify store
 
 
 class InvalidUrlDict(TypedDict):

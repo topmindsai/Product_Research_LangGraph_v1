@@ -83,6 +83,7 @@ async def run_workflow(product_input: ProductInput) -> ValidationImageExtraction
                     width=page.get("product_dimensions", {}).get("width"),
                     height=page.get("product_dimensions", {}).get("height"),
                 ),
+                is_shopify=page.get("is_shopify"),
             )
             for page in final_result.get("validated_pages", [])
         ]
